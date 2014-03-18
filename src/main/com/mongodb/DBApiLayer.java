@@ -34,6 +34,8 @@ import java.util.logging.Logger;
  * through instances of Mongo.
  */
 public class DBApiLayer extends DB {
+	
+	private static org.apache.log4j.Logger queryLogger = org.apache.log4j.Logger.getLogger(DBApiLayer.class);
 
     /** The maximum number of cursors allowed */
     static final int NUM_CURSORS_BEFORE_KILL = 100;
@@ -264,7 +266,11 @@ public class DBApiLayer extends DB {
 
             OutMessage om = OutMessage.remove(this, encoder, o);
 
-            return _connector.say( _db , om , concern );
+            long begin = System.currentTimeMillis();
+            WriteResult result = _connector.say( _db , om , concern );
+            queryLogger.debug("remove: " + _fullNameSpace + " " + JSON.serialize( o ) + " " + (System.currentTimeMillis() - begin));
+            
+            return result;
         }
 
         @Override
@@ -285,8 +291,12 @@ public class DBApiLayer extends DB {
             OutMessage query = OutMessage.query( this , options , numToSkip , chooseBatchSize(batchSize, limit, 0) , ref , fields, readPref,
                     encoder);
 
+            long begin = System.currentTimeMillis();
+            
             Response res = _connector.call( _db , this , query , null , 2, readPref, decoder );
 
+            queryLogger.debug( "find: " + _fullNameSpace + " " + JSON.serialize( ref ) + " " + (System.currentTimeMillis() - begin));
+            
             if ( res.size() == 1 ){
                 BSONObject foo = res.get(0);
                 MongoException e = MongoException.parse( foo );
@@ -323,8 +333,12 @@ public class DBApiLayer extends DB {
             }
 
             OutMessage om = OutMessage.update(this, encoder, upsert, multi, query, o);
-
-            return _connector.say( _db , om , concern );
+            
+            long begin = System.currentTimeMillis();
+            WriteResult result = _connector.say( _db , om , concern );
+            queryLogger.debug( "update: " + _fullNameSpace + " " + JSON.serialize( query ) + " " + JSON.serialize( o ) + " " + (System.currentTimeMillis() - begin));
+            
+            return result;
         }
 
         public void createIndex( final DBObject keys, final DBObject options, DBEncoder encoder ){
