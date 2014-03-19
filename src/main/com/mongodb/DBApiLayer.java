@@ -19,9 +19,13 @@
 package com.mongodb;
 
 import com.mongodb.util.JSON;
+
 import org.bson.BSONObject;
 import org.bson.types.ObjectId;
+import org.slf4j.LoggerFactory;
 
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -35,7 +39,7 @@ import java.util.logging.Logger;
  */
 public class DBApiLayer extends DB {
 	
-	private static org.apache.log4j.Logger queryLogger = org.apache.log4j.Logger.getLogger(DBApiLayer.class);
+	private static org.slf4j.Logger queryLogger = LoggerFactory.getLogger(DBApiLayer.class);
 
     /** The maximum number of cursors allowed */
     static final int NUM_CURSORS_BEFORE_KILL = 100;
@@ -75,6 +79,38 @@ public class DBApiLayer extends DB {
             res = -1;
         }
         return res;
+    }
+    
+    private static long queryThreshold = 0; 
+    
+    static {
+    	String threshold = System.getenv("MONGO_SLOW_QUERY_THRESHOLD");
+    	if(threshold != null) {
+    		queryThreshold = Long.parseLong(threshold);
+    	}
+    }
+    
+    private static void logQuery(String cmdType, String namespace, DBObject query, long time) {
+    	
+    	if(time < queryThreshold) return;
+
+    	DBObject q = query;
+    	if(query.containsField("$query")) {
+    		q = (DBObject) query.get("$query");
+    	}
+    	
+    	if(q.containsField("_id")) return;
+    	
+    	String[] dbCollection = namespace.split("\\.");
+    	
+    	if(dbCollection.length != 2) return;
+    	
+    	if("$cmd".equals(dbCollection[1])) return;
+    	
+    	try {
+			queryLogger.debug(cmdType + " " + namespace + " " + URLEncoder.encode(JSON.serialize(query), "utf-8") + " " + time);
+		} catch (UnsupportedEncodingException e) {
+		}
     }
 
     /**
@@ -268,7 +304,8 @@ public class DBApiLayer extends DB {
 
             long begin = System.currentTimeMillis();
             WriteResult result = _connector.say( _db , om , concern );
-            queryLogger.debug("remove: " + _fullNameSpace + " " + JSON.serialize( o ) + " " + (System.currentTimeMillis() - begin));
+            
+            logQuery("remove", _fullNameSpace, o, (System.currentTimeMillis() - begin));
             
             return result;
         }
@@ -295,7 +332,7 @@ public class DBApiLayer extends DB {
             
             Response res = _connector.call( _db , this , query , null , 2, readPref, decoder );
 
-            queryLogger.debug( "find: " + _fullNameSpace + " " + JSON.serialize( ref ) + " " + (System.currentTimeMillis() - begin));
+            logQuery("find", _fullNameSpace, ref, (System.currentTimeMillis() - begin));
             
             if ( res.size() == 1 ){
                 BSONObject foo = res.get(0);
@@ -336,7 +373,8 @@ public class DBApiLayer extends DB {
             
             long begin = System.currentTimeMillis();
             WriteResult result = _connector.say( _db , om , concern );
-            queryLogger.debug( "update: " + _fullNameSpace + " " + JSON.serialize( query ) + " " + JSON.serialize( o ) + " " + (System.currentTimeMillis() - begin));
+            
+            logQuery("update", _fullNameSpace, query, (System.currentTimeMillis() - begin));
             
             return result;
         }
