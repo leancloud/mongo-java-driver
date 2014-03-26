@@ -22,7 +22,6 @@ import com.mongodb.util.JSON;
 
 import org.bson.BSONObject;
 import org.bson.types.ObjectId;
-import org.slf4j.LoggerFactory;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
@@ -39,7 +38,7 @@ import java.util.logging.Logger;
  */
 public class DBApiLayer extends DB {
 	
-	private static org.slf4j.Logger queryLogger = LoggerFactory.getLogger(DBApiLayer.class);
+	private static org.apache.log4j.Logger queryLogger = org.apache.log4j.Logger.getLogger(DBApiLayer.class);
 
     /** The maximum number of cursors allowed */
     static final int NUM_CURSORS_BEFORE_KILL = 100;
