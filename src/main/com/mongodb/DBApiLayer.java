@@ -18,18 +18,29 @@
 
 package com.mongodb;
 
-import com.mongodb.util.JSON;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.NoSuchElementException;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.bson.BSONObject;
 import org.bson.types.ObjectId;
 
-import java.io.UnsupportedEncodingException;
-import java.net.URLEncoder;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import com.mongodb.util.JSON;
 
 
 /** Database API
@@ -80,7 +91,7 @@ public class DBApiLayer extends DB {
         return res;
     }
     
-    private static long queryThreshold = 0; 
+    private static long queryThreshold = 500; 
     
     static {
     	String threshold = System.getenv("MONGO_SLOW_QUERY_THRESHOLD");
@@ -89,10 +100,124 @@ public class DBApiLayer extends DB {
     	}
     }
     
-    private static void logQuery(String cmdType, String namespace, DBObject query, long time) {
+	public static String joinString(final Object[] array, final char separator) {
+		int startIndex = 0;
+		int endIndex = array.length;
+		final int noOfItems = endIndex - startIndex;
+		if (noOfItems <= 0) {
+			return "";
+		}
+		final StringBuilder buf = new StringBuilder(noOfItems * 16);
+		for (int i = startIndex; i < endIndex; i++) {
+			if (i > startIndex) {
+				buf.append(separator);
+			}
+			if (array[i] != null) {
+				buf.append(array[i]);
+			}
+		}
+		return buf.toString();
+	}
+    
+    private static String parseQueryString(DBObject query) {
     	
-    	if(time < queryThreshold) return;
+    	if(query.containsField("$or")) {
+    		Object or = query.get("$or");
+    		if(or instanceof BasicDBList) {
+    			Set<String> set = new HashSet<String>();
+    			for(Object o : ((BasicDBList) or)) {
+    				if(o instanceof DBObject) {
+    					set.add(parseQueryString((DBObject) o));
+    				}
+    			}
+    			return joinString(set.toArray(), '|');
+    		} else {
+    			return "";
+    		}
+    	}
+    	
+    	if(query.containsField("$and")) {
+    		Object and = query.get("$and");
+    		if(and instanceof BasicDBList) {
+    			Set<String> set = new HashSet<String>();
+    			for(Object o : (BasicDBList) and) {
+    				if(o instanceof DBObject) {
+    					set.add(parseQueryString((DBObject) o));
+    				}
+    			}
+    			return joinString(set.toArray(), ',');
+    		} else {
+    			return "";
+    		}
+    	}
+    	
+    	Set<String> fields = new HashSet<String>();
+    	
+    	for(Object o : query.toMap().entrySet()) {
+    		Entry<Object, Object> e = (Entry<Object, Object>) o;
+    		Object key = e.getKey();
+    		Object value = e.getValue();
+    		String f = key.toString();
+    		if(value instanceof DBObject) {
+    			DBObject v = (DBObject) value;
+    			if(v.containsField("$gt")) {
+    				f += ">";
+    			} else if(v.containsField("$lt")) {
+    				f += "<";
+    			} else if(v.containsField("$ne")) {
+    				f += "<>";
+    			} else if(v.containsField("$gte")) {
+    				f += ">=";
+    			} else if(v.containsField("$lte")) {
+    				f += "<=";
+    			} else if(v.containsField("$in")) {
+    				f += "<in>";
+    			}
+    		}
+    		fields.add(f);
+    	}
+    	
+    	return joinString(fields.toArray(), ',');
+    }
+    
+    private class QueryRecord {
+    	
+    	public AtomicInteger count = new AtomicInteger();
+    	public AtomicLong time = new AtomicLong();
+    }
+    
+    private class RecordQueryCountThread implements Runnable {
 
+		@Override
+		public void run() {
+			
+			while(true) {
+				
+				try {
+					Thread.sleep(1000);
+					ConcurrentHashMap<String, QueryRecord> map = queryRecordMap;
+					queryRecordMap = new ConcurrentHashMap<String, QueryRecord>();
+					for(Entry<String, QueryRecord> entry : map.entrySet()) {
+						System.out.println(entry.getKey() + " " + entry.getValue().count + " " + entry.getValue().time);
+					}
+				} catch(Exception ex) {
+				}
+			}
+		}
+    }
+    
+    private void recordQuery(String query, long time) {
+    	QueryRecord record = new QueryRecord();
+    	QueryRecord oldRecord = queryRecordMap.putIfAbsent(query, record);
+    	if(oldRecord != null) record = oldRecord;
+    	record.count.incrementAndGet();
+    	record.time.addAndGet(time);
+    }
+    
+    private volatile ConcurrentHashMap<String, QueryRecord> queryRecordMap = new ConcurrentHashMap<String, QueryRecord>();
+        
+    private void logQuery(String cmdType, String namespace, DBObject query, long time) {
+    	
     	DBObject q = query;
     	if(query.containsField("$query")) {
     		q = (DBObject) query.get("$query");
@@ -106,10 +231,17 @@ public class DBApiLayer extends DB {
     	
     	if("$cmd".equals(dbCollection[1])) return;
     	
+    	String queryString = "";
+    	
     	try {
-			queryLogger.debug(cmdType + " " + namespace + " " + URLEncoder.encode(JSON.serialize(query), "utf-8") + " " + time);
-		} catch (UnsupportedEncodingException e) {
-		}
+    		queryString = parseQueryString(q);
+    	} catch(Exception ex) {}
+    	
+    	if(time < queryThreshold) {    	
+    		recordQuery(cmdType + " " + namespace + " " + queryString, time);
+    	} else {
+    		System.out.println(cmdType + " " + namespace + " " + queryString + " " + time + " 1");
+    	}
     }
 
     /**
@@ -127,6 +259,8 @@ public class DBApiLayer extends DB {
         _rootPlusDot = _root + ".";
 
         _connector = connector;
+        
+        new Thread(new RecordQueryCountThread()).start();
     }
 
     public void requestStart(){
