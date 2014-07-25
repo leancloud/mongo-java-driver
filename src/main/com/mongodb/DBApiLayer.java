@@ -198,7 +198,7 @@ public class DBApiLayer extends DB {
 					ConcurrentHashMap<String, QueryRecord> map = queryRecordMap;
 					queryRecordMap = new ConcurrentHashMap<String, QueryRecord>();
 					for(Entry<String, QueryRecord> entry : map.entrySet()) {
-						System.out.println(entry.getKey() + " " + entry.getValue().count + " " + entry.getValue().time);
+						queryLogger.debug(entry.getKey() + " " + entry.getValue().count + " " + entry.getValue().time);
 					}
 				} catch(Exception ex) {
 				}
@@ -240,7 +240,7 @@ public class DBApiLayer extends DB {
     	if(time < queryThreshold) {    	
     		recordQuery(cmdType + " " + namespace + " " + queryString, time);
     	} else {
-    		System.out.println(cmdType + " " + namespace + " " + queryString + " " + time + " 1");
+    		queryLogger.debug(cmdType + " " + namespace + " " + queryString + " " + time + " 1");
     	}
     }
 
