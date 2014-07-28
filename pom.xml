@@ -8,7 +8,7 @@ driver developers who would rather use Maven than Ant as their build tool.
     <artifactId>mongo-java-driver</artifactId>
     <packaging>bundle</packaging>
     <name>MongoDB Java Driver</name>
-    <version>2.11.2-query-log-r2</version>
+    <version>2.11.2-query-log-SNAPSHOT</version>
     <description>The MongoDB Java driver</description>
     <url>http://www.mongodb.org</url>
 
@@ -23,6 +23,14 @@ driver developers who would rather use Maven than Ant as their build tool.
     <scm>
         <url>https://github.com/mongodb/mongo-java-driver</url>
     </scm>
+    
+   <distributionManagement>
+		<repository>
+			<id>releases</id>
+			<name>releases</name>
+			<url>http://maven.mei.fm/nexus/content/repositories/snapshots/</url>
+		</repository>
+	</distributionManagement>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
