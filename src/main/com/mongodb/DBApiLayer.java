@@ -223,6 +223,18 @@ public class DBApiLayer extends DB {
     		q = (DBObject) query.get("$query");
     	}
     	
+    	String orderby = null;
+    	
+    	if(query.containsField("$orderby")) {
+    		DBObject o = (DBObject) query.get("$orderby");
+    		ArrayList<String> orders = new ArrayList<String>();
+    		for(String k : o.keySet()) {
+    			String v = o.get(k).toString();
+    			orders.add(k + ":" + v);
+    		}
+    		orderby = joinString(orders.toArray(new String[0]), ',');
+    	}
+    	
     	if(q.containsField("_id")) return;
     	
     	String[] dbCollection = namespace.split("\\.");
@@ -236,6 +248,10 @@ public class DBApiLayer extends DB {
     	try {
     		queryString = parseQueryString(q);
     	} catch(Exception ex) {}
+    	
+    	if(orderby != null) {
+    		queryString += "|" + orderby;
+    	}
     	
     	if(time < queryThreshold) {    	
     		recordQuery(cmdType + " " + namespace + " " + queryString, time);
