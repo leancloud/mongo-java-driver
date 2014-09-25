@@ -221,6 +221,8 @@ public class DBApiLayer extends DB {
     	DBObject q = query;
     	if(query.containsField("$query")) {
     		q = (DBObject) query.get("$query");
+    	} else if (query.containsField("query")) {
+    		q = (DBObject) query.get("query");
     	}
     	
     	String orderby = null;
@@ -387,6 +389,8 @@ public class DBApiLayer extends DB {
             if (concern == null) {
                 throw new IllegalArgumentException("Write concern can not be null");
             }
+            
+            recordQuery("insert" + " " + _fullNameSpace + " " + "", 0);
 
             return insert(list, true, concern, encoder);
         }
