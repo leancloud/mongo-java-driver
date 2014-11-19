@@ -138,9 +138,9 @@ public class DBApiLayer extends DB {
     	
     	if(query.containsField("$and")) {
     		Object and = query.get("$and");
-    		if(and instanceof BasicDBList) {
+    		if(and instanceof List) {
     			Set<String> set = new HashSet<String>();
-    			for(Object o : (BasicDBList) and) {
+    			for(Object o : (List) and) {
     				if(o instanceof DBObject) {
     					set.add(parseQueryString((DBObject) o));
     				}
@@ -243,7 +243,14 @@ public class DBApiLayer extends DB {
     	
     	if(dbCollection.length != 2) return;
     	
-    	if("$cmd".equals(dbCollection[1])) return;
+    	if("$cmd".equals(dbCollection[1])) {
+    		if(query.containsField("count")) {
+    			namespace = dbCollection[0] + "." + query.get("count");
+    			cmdType = "count";    			
+    		} else {
+    			return;
+    		}
+    	}
     	
     	String queryString = "";
     	
@@ -754,5 +761,9 @@ public class DBApiLayer extends DB {
     final ConcurrentHashMap<String,MyCollection> _collections = new ConcurrentHashMap<String,MyCollection>();
 
     ConcurrentLinkedQueue<DeadCursor> _deadCursorIds = new ConcurrentLinkedQueue<DeadCursor>();
+    
+    public static void main(String[] args) {
+    	
+    }
 
 }
