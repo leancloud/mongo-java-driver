@@ -118,63 +118,50 @@ public class DBApiLayer extends DB {
 		}
 		return buf.toString();
 	}
-    
+	
     private static String parseQueryString(DBObject query) {
-    	
-    	if(query.containsField("$or")) {
-    		Object or = query.get("$or");
-    		if(or instanceof BasicDBList) {
-    			Set<String> set = new HashSet<String>();
-    			for(Object o : ((BasicDBList) or)) {
-    				if(o instanceof DBObject) {
-    					set.add(parseQueryString((DBObject) o));
-    				}
-    			}
-    			return joinString(set.toArray(), '|');
-    		} else {
-    			return "";
-    		}
-    	}
-    	
-    	if(query.containsField("$and")) {
-    		Object and = query.get("$and");
-    		if(and instanceof List) {
-    			Set<String> set = new HashSet<String>();
-    			for(Object o : (List) and) {
-    				if(o instanceof DBObject) {
-    					set.add(parseQueryString((DBObject) o));
-    				}
-    			}
-    			return joinString(set.toArray(), ',');
-    		} else {
-    			return "";
-    		}
-    	}
     	
     	Set<String> fields = new HashSet<String>();
     	
     	for(Object o : query.toMap().entrySet()) {
+    		
     		Entry<Object, Object> e = (Entry<Object, Object>) o;
     		Object key = e.getKey();
     		Object value = e.getValue();
     		String f = key.toString();
-    		if(value instanceof DBObject) {
-    			DBObject v = (DBObject) value;
-    			if(v.containsField("$gt")) {
-    				f += ">";
-    			} else if(v.containsField("$lt")) {
-    				f += "<";
-    			} else if(v.containsField("$ne")) {
-    				f += "<>";
-    			} else if(v.containsField("$gte")) {
-    				f += ">=";
-    			} else if(v.containsField("$lte")) {
-    				f += "<=";
-    			} else if(v.containsField("$in")) {
-    				f += "<in>";
+    		
+    		if (f.equals("$and")) {
+    			if (value instanceof List) {
+    				Set<String> set = new HashSet<String> ();
+    				for (Object obj : (List) value) {
+    					if (obj instanceof DBObject) {
+    						set.add(parseQueryString((DBObject) obj));
+    					}
+    				}
+    				fields.add(joinString(set.toArray(), ','));
     			}
+    			
+    		} else if (f.startsWith("$")) {
+    			
+    		} else {    			
+        		if(value instanceof DBObject) {
+        			DBObject v = (DBObject) value;
+        			if(v.containsField("$gt")) {
+        				f += ">";
+        			} else if(v.containsField("$lt")) {
+        				f += "<";
+        			} else if(v.containsField("$ne")) {
+        				f += "<>";
+        			} else if(v.containsField("$gte")) {
+        				f += ">=";
+        			} else if(v.containsField("$lte")) {
+        				f += "<=";
+        			} else if(v.containsField("$in")) {
+        				f += "<in>";
+        			}
+        		}
+        		fields.add(f);
     		}
-    		fields.add(f);
     	}
     	
     	return joinString(fields.toArray(), ',');
@@ -219,6 +206,7 @@ public class DBApiLayer extends DB {
     private void logQuery(String cmdType, String namespace, DBObject query, long time) {
     	
     	DBObject q = query;
+    	
     	if(query.containsField("$query")) {
     		q = (DBObject) query.get("$query");
     	} else if (query.containsField("query")) {
