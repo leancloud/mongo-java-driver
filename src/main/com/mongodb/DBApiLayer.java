@@ -255,7 +255,7 @@ public class DBApiLayer extends DB {
     		recordQuery(cmdType + " " + namespace + " " + queryString, time);
     	} else {
     		queryLogger.debug(cmdType + " " + namespace + " " + queryString + " " + time + " 1 S");
-    		slowQueryTextLogger.warn("SLOW_QUERY " + time + " " + query);
+    		slowQueryTextLogger.warn("SLOW_QUERY " + time + " " + namespace + " " + query);
     	}
     }
 
