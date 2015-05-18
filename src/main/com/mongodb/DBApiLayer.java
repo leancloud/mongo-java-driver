@@ -50,6 +50,7 @@ import com.mongodb.util.JSON;
 public class DBApiLayer extends DB {
 	
 	private static org.apache.log4j.Logger queryLogger = org.apache.log4j.Logger.getLogger(DBApiLayer.class);
+	private static org.apache.log4j.Logger slowQueryTextLogger = org.apache.log4j.Logger.getRootLogger();
 
     /** The maximum number of cursors allowed */
     static final int NUM_CURSORS_BEFORE_KILL = 100;
@@ -254,6 +255,7 @@ public class DBApiLayer extends DB {
     		recordQuery(cmdType + " " + namespace + " " + queryString, time);
     	} else {
     		queryLogger.debug(cmdType + " " + namespace + " " + queryString + " " + time + " 1 S");
+    		slowQueryTextLogger.warn("SLOW_QUERY " + time + " " + query);
     	}
     }
 
@@ -451,16 +453,16 @@ public class DBApiLayer extends DB {
             OutMessage om = OutMessage.remove(this, encoder, o);
 
             long begin = System.currentTimeMillis();
-            WriteResult result = _connector.say( _db , om , concern );
-            
-            logQuery("remove", _fullNameSpace, o, (System.currentTimeMillis() - begin));
-            
-            return result;
+            try {
+            	WriteResult result = _connector.say( _db , om , concern );            
+            	return result;
+            } finally {
+            	logQuery("remove", _fullNameSpace, o, (System.currentTimeMillis() - begin));            	
+            }
         }
 
         @Override
         Iterator<DBObject> __find( DBObject ref , DBObject fields , int numToSkip , int batchSize, int limit , int options, ReadPreference readPref, DBDecoder decoder ){
-
             return __find(ref, fields, numToSkip, batchSize, limit, options, readPref, decoder, DefaultDBEncoder.FACTORY.create());
         }
 
@@ -477,19 +479,18 @@ public class DBApiLayer extends DB {
                     encoder);
 
             long begin = System.currentTimeMillis();
-            
-            Response res = _connector.call( _db , this , query , null , 2, readPref, decoder );
-
-            logQuery("find", _fullNameSpace, ref, (System.currentTimeMillis() - begin));
-            
-            if ( res.size() == 1 ){
-                BSONObject foo = res.get(0);
-                MongoException e = MongoException.parse( foo );
-                if ( e != null && ! _name.equals( "$cmd" ) )
-                    throw e;
+            try {
+	           	Response res = _connector.call( _db , this , query , null , 2, readPref, decoder );            
+	            if ( res.size() == 1 ){
+	                BSONObject foo = res.get(0);
+	                MongoException e = MongoException.parse( foo );
+	                if ( e != null && ! _name.equals( "$cmd" ) )
+	                    throw e;
+	            }
+	            return new Result( this , res , batchSize, limit , options, decoder );
+            } finally {
+            	logQuery("find", _fullNameSpace, ref, (System.currentTimeMillis() - begin));
             }
-
-            return new Result( this , res , batchSize, limit , options, decoder );
         }
 
         @Override
@@ -520,11 +521,13 @@ public class DBApiLayer extends DB {
             OutMessage om = OutMessage.update(this, encoder, upsert, multi, query, o);
             
             long begin = System.currentTimeMillis();
-            WriteResult result = _connector.say( _db , om , concern );
             
-            logQuery("update", _fullNameSpace, query, (System.currentTimeMillis() - begin));
-            
-            return result;
+            try {
+            	WriteResult result = _connector.say( _db , om , concern );
+            	return result;
+            } finally {
+            	logQuery("update", _fullNameSpace, query, (System.currentTimeMillis() - begin));            	
+            }
         }
 
         public void createIndex( final DBObject keys, final DBObject options, DBEncoder encoder ){
@@ -749,9 +752,4 @@ public class DBApiLayer extends DB {
     final ConcurrentHashMap<String,MyCollection> _collections = new ConcurrentHashMap<String,MyCollection>();
 
     ConcurrentLinkedQueue<DeadCursor> _deadCursorIds = new ConcurrentLinkedQueue<DeadCursor>();
-    
-    public static void main(String[] args) {
-    	
-    }
-
 }
