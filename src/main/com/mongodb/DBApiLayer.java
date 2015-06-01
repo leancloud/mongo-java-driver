@@ -93,7 +93,7 @@ public class DBApiLayer extends DB {
     }
     
     private static long queryThreshold = 500;
-    private static int connLimit = 20;
+    private static int connLimit = 30;
     
     static {
     	String threshold = System.getenv("MONGO_SLOW_QUERY_THRESHOLD");
