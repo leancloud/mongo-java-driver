@@ -5,7 +5,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class ConnectionChecker {
 	
-	private static org.apache.log4j.Logger log = org.apache.log4j.Logger.getLogger(ConnectionChecker.class);
+	class ConnectionLimitException extends RuntimeException {
+		
+		public ConnectionLimitException(String message) {
+			super(message);
+		}
+	}
+	
+	private static org.apache.log4j.Logger log = org.apache.log4j.Logger.getRootLogger();
 	
 	class ValueEqualAtomicInteger extends AtomicInteger {
 
@@ -33,7 +40,7 @@ public class ConnectionChecker {
 		}
 	}
 
-	private int LIMIT = 10;
+	private int LIMIT = 20;
 	
 	public ConnectionChecker(int limit) {
 		this.LIMIT = limit;
@@ -43,10 +50,14 @@ public class ConnectionChecker {
 	
 	public void beforeGet(String appid) {
 		ValueEqualAtomicInteger count = counterMap.putIfAbsent(appid, new ValueEqualAtomicInteger(1));
-		if(count != null && count.incrementAndGet() > LIMIT) {
-			count.decrementAndGet();
-//			throw new RuntimeException("mongo connnection limit");
-			log.info("MONGO_CONN_LIMIT " + appid);
+		if(count != null) {
+			int now = count.incrementAndGet();
+			if (now >= 10) {
+				log.info("MONGO_CONN_LIMIT " + now + " " + appid);
+			}
+			if (now >= LIMIT) {
+				throw new ConnectionLimitException("MONGO_CONN_LIMIT: " + LIMIT + " " + appid);
+			}
 		}
 	}
 	
