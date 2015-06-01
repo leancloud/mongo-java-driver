@@ -51,7 +51,7 @@ public class DBApiLayer extends DB {
 	
 	private static org.apache.log4j.Logger queryLogger = org.apache.log4j.Logger.getLogger(DBApiLayer.class);
 	private static org.apache.log4j.Logger slowQueryTextLogger = org.apache.log4j.Logger.getRootLogger();
-
+	
     /** The maximum number of cursors allowed */
     static final int NUM_CURSORS_BEFORE_KILL = 100;
     static final int NUM_CURSORS_PER_BATCH = 20000;
@@ -92,14 +92,21 @@ public class DBApiLayer extends DB {
         return res;
     }
     
-    private static long queryThreshold = 500; 
+    private static long queryThreshold = 500;
+    private static int connLimit = 20;
     
     static {
     	String threshold = System.getenv("MONGO_SLOW_QUERY_THRESHOLD");
     	if(threshold != null) {
     		queryThreshold = Long.parseLong(threshold);
     	}
+    	String connectionLimit = System.getenv("MONGO_QUERY_CONN_LIMIT");
+    	if(connectionLimit != null) {
+    		connLimit = Integer.parseInt(connectionLimit);
+    	}
     }
+    
+	private ConnectionChecker connChecker = new ConnectionChecker(connLimit);
     
 	public static String joinString(final Object[] array, final char separator) {
 		int startIndex = 0;
@@ -454,9 +461,11 @@ public class DBApiLayer extends DB {
 
             long begin = System.currentTimeMillis();
             try {
+            	connChecker.beforeGet(_root);
             	WriteResult result = _connector.say( _db , om , concern );            
             	return result;
             } finally {
+            	connChecker.afterReturn(_root);
             	logQuery("remove", _fullNameSpace, o, (System.currentTimeMillis() - begin));            	
             }
         }
@@ -480,6 +489,7 @@ public class DBApiLayer extends DB {
 
             long begin = System.currentTimeMillis();
             try {
+            	connChecker.beforeGet(_root);
 	           	Response res = _connector.call( _db , this , query , null , 2, readPref, decoder );            
 	            if ( res.size() == 1 ){
 	                BSONObject foo = res.get(0);
@@ -489,6 +499,7 @@ public class DBApiLayer extends DB {
 	            }
 	            return new Result( this , res , batchSize, limit , options, decoder );
             } finally {
+            	connChecker.afterReturn(_root);
             	logQuery("find", _fullNameSpace, ref, (System.currentTimeMillis() - begin));
             }
         }
@@ -523,9 +534,11 @@ public class DBApiLayer extends DB {
             long begin = System.currentTimeMillis();
             
             try {
+            	connChecker.beforeGet(_root);
             	WriteResult result = _connector.say( _db , om , concern );
             	return result;
             } finally {
+            	connChecker.afterReturn(_root);
             	logQuery("update", _fullNameSpace, query, (System.currentTimeMillis() - begin));            	
             }
         }
