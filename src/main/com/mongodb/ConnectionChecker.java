@@ -5,7 +5,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class ConnectionChecker {
 	
-	class ConnectionLimitException extends RuntimeException {
+	public static class ConnectionLimitException extends RuntimeException {
 		
 		public ConnectionLimitException(String message) {
 			super(message);
@@ -40,7 +40,7 @@ public class ConnectionChecker {
 		}
 	}
 
-	private int LIMIT = 20;
+	private int LIMIT = 30;
 	
 	public ConnectionChecker(int limit) {
 		this.LIMIT = limit;
@@ -56,7 +56,7 @@ public class ConnectionChecker {
 				log.info("MONGO_CONN_LIMIT " + now + " " + appid);
 			}
 			if (now >= LIMIT) {
-				throw new ConnectionLimitException("MONGO_CONN_LIMIT: " + LIMIT + " " + appid);
+				throw new ConnectionLimitException("MONGO_CONN_LIMIT: " + now + " " + appid);
 			}
 		}
 	}
