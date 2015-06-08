@@ -55,7 +55,7 @@ public class ConnectionChecker {
 			if (now >= 10) {
 				log.info("MONGO_CONN_LIMIT " + now + " " + appid);
 			}
-			if (now >= LIMIT) {
+			if (now >= LIMIT && !appid.equals("avoscloud_quartz")) {
 				throw new ConnectionLimitException("MONGO_CONN_LIMIT: " + now + " " + appid);
 			}
 		}
