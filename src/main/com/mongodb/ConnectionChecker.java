@@ -52,9 +52,6 @@ public class ConnectionChecker {
 		ValueEqualAtomicInteger count = counterMap.putIfAbsent(appid, new ValueEqualAtomicInteger(1));
 		if(count != null) {
 			int now = count.incrementAndGet();
-			if (now >= 10) {
-				log.info("MONGO_CONN_LIMIT " + now + " " + appid);
-			}
 			if (now >= LIMIT && !appid.equals("avoscloud_quartz")) {
 				throw new ConnectionLimitException("MONGO_CONN_LIMIT: " + now + " " + appid);
 			}

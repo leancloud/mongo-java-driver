@@ -104,6 +104,8 @@ public class DBApiLayer extends DB {
     	if(connectionLimit != null) {
     		connLimit = Integer.parseInt(connectionLimit);
     	}
+    	
+    	new Thread(new RecordQueryCountThread()).start();
     }
     
 	private ConnectionChecker connChecker = new ConnectionChecker(connLimit);
@@ -181,7 +183,7 @@ public class DBApiLayer extends DB {
     	public AtomicLong time = new AtomicLong();
     }
     
-    private class RecordQueryCountThread implements Runnable {
+    private static class RecordQueryCountThread implements Runnable {
 
 		@Override
 		public void run() {
@@ -209,7 +211,7 @@ public class DBApiLayer extends DB {
     	record.time.addAndGet(time);
     }
     
-    private volatile ConcurrentHashMap<String, QueryRecord> queryRecordMap = new ConcurrentHashMap<String, QueryRecord>();
+    private static volatile ConcurrentHashMap<String, QueryRecord> queryRecordMap = new ConcurrentHashMap<String, QueryRecord>();
         
     private void logQuery(String cmdType, String namespace, DBObject query, long time) {
     	
@@ -281,8 +283,6 @@ public class DBApiLayer extends DB {
         _rootPlusDot = _root + ".";
 
         _connector = connector;
-        
-        new Thread(new RecordQueryCountThread()).start();
     }
 
     public void requestStart(){
