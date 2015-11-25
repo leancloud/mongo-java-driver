@@ -129,6 +129,40 @@ public class DBApiLayer extends DB {
 		return buf.toString();
 	}
 	
+	private static Set<String> extractOrQueries(DBObject query) {
+		Set<String> fields = new HashSet<String>();
+		for(Object o :query.toMap().entrySet()) {
+			Entry<Object, Object> e = (Entry<Object, Object>) o;
+			Object key = e.getKey();
+			Object value = e.getValue();
+			String f = key.toString();
+			
+			if (f.equals("$and")) {
+    			if (value instanceof List) {
+    				Set<String> set = new HashSet<String> ();
+    				for (Object obj : (List) value) {
+    					if (obj instanceof DBObject) {
+    						set.addAll(extractOrQueries((DBObject) obj));
+    					}
+    				}
+    				fields.addAll(set);
+    			}
+			} else if (f.equals("$or")) {
+				if (value instanceof List) {
+					Set<String> set = new HashSet<String>();
+    				for (Object obj : (List) value) {
+    					if (obj instanceof DBObject) {
+    						set.add(parseQueryString((DBObject) obj));
+    					}
+    				}
+    				fields.addAll(set);
+				}
+			}
+		}
+		
+		return fields;
+	}
+	
     private static String parseQueryString(DBObject query) {
     	
     	Set<String> fields = new HashSet<String>();
@@ -150,7 +184,16 @@ public class DBApiLayer extends DB {
     				}
     				fields.add(joinString(set.toArray(), ','));
     			}
-    			
+    		} else if (f.equals("$or")) {
+    			if (value instanceof List) {
+    				Set<String> set = new HashSet<String> ();
+    				for (Object obj : (List) value) {
+    					if (obj instanceof DBObject) {
+    						set.add(parseQueryString((DBObject) obj));
+    					}
+    				}
+    				if (set.size() == 1) fields.add(set.iterator().next());
+    			}  			
     		} else if (f.startsWith("$")) {
     			
     		} else {    			
@@ -168,6 +211,8 @@ public class DBApiLayer extends DB {
         				f += "<=";
         			} else if(v.containsField("$in")) {
         				f += "<in>";
+        			} else if(v.containsField("$regex")) {
+        				f += "<regex>";
         			}
         		}
         		fields.add(f);
@@ -259,12 +304,20 @@ public class DBApiLayer extends DB {
     	if(orderby != null) {
     		queryString += "|" + orderby;
     	}
-    	
+        	
+    	Set<String> orQueries = extractOrQueries(q);
+        	
     	if(time < queryThreshold) {    	
     		recordQuery(cmdType + " " + namespace + " " + queryString, time);
+    		for (String o : orQueries) {
+    			recordQuery(cmdType + " " + namespace + " " + o, time); 
+    		}
     	} else {
-    		queryLogger.debug(cmdType + " " + namespace + " " + queryString + " " + time + " 1 S");
     		slowQueryTextLogger.warn("SLOW_QUERY " + time + " " + namespace + " " + query);
+    		queryLogger.debug(cmdType + " " + namespace + " " + queryString + " " + time + " 1 S");
+    		for (String o : orQueries) {
+    			queryLogger.debug(cmdType + " " + namespace + " " + o + " " + time + " 1 S");
+    		}
     	}
     }
 
