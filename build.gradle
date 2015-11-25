@@ -45,7 +45,7 @@ configure(subprojects.findAll { it.name != 'util' }) {
     evaluationDependsOn(':util')
 
     group = 'org.mongodb'
-    version = '3.0.3'
+    version = '3.0.3-querylog-SNAPSHOT'
     sourceCompatibility = JavaVersion.VERSION_1_6
     targetCompatibility = JavaVersion.VERSION_1_6
 
@@ -90,11 +90,12 @@ configure(subprojects.findAll { it.name != 'util' }) {
 }
 
 configure(subprojects.findAll { it.name != 'util' && it.name != 'mongo-java-driver' }) {
-    apply plugin: 'checkstyle'
+
     apply plugin: 'findbugs'
     apply plugin: 'jacoco'
     apply plugin: 'groovy'
     apply plugin: 'codenarc'
+    apply plugin: 'maven-publish'
 
     dependencies {
         testCompile 'org.codehaus.groovy:groovy-all:2.3.9'
@@ -185,12 +186,6 @@ configure(subprojects.findAll { it.name != 'util' && it.name != 'mongo-java-driv
     }
 
     task testCoverage(dependsOn: test)
-
-    /* Code quality */
-    checkstyle {
-        toolVersion = "6.2"
-        configFile = new File("$configDir/checkstyle.xml")
-    }
 
     findbugs {
         excludeFilter = new File("$configDir/findbugs-exclude.xml")

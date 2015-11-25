@@ -69,7 +69,17 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
     @Override
     public WriteConcernResult insert(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                      final List<InsertRequest> inserts) {
-        return executeProtocol(new InsertProtocol(namespace, ordered, writeConcern, inserts));
+    	long begin = System.currentTimeMillis();
+    	try {
+    		MongoQueryAnalyzer.beforeGet(namespace.getDatabaseName());
+    		return executeProtocol(new InsertProtocol(namespace, ordered, writeConcern, inserts));
+    	} finally {
+    		MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
+    		long avgCost = (System.currentTimeMillis() - begin) / inserts.size();
+    		for (int i=0; i<inserts.size(); i++) {
+    			MongoQueryAnalyzer.logQuery("insert", namespace.getFullName(), new BsonDocument(), avgCost);
+    		}
+    	}
     }
 
     @Override
@@ -81,7 +91,17 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
     @Override
     public WriteConcernResult update(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                      final List<UpdateRequest> updates) {
-        return executeProtocol(new UpdateProtocol(namespace, ordered, writeConcern, updates));
+    	long begin = System.currentTimeMillis();
+    	try {
+    		MongoQueryAnalyzer.beforeGet(namespace.getDatabaseName());
+    		return executeProtocol(new UpdateProtocol(namespace, ordered, writeConcern, updates));
+    	} finally {
+    		MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
+    		long avgCost = (System.currentTimeMillis() - begin) / updates.size();
+    		for (UpdateRequest r : updates) {
+    			MongoQueryAnalyzer.logQuery("update", namespace.getFullName(), r.getFilter(), avgCost);
+    		}
+    	}
     }
 
     @Override
@@ -93,7 +113,17 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
     @Override
     public WriteConcernResult delete(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                      final List<DeleteRequest> deletes) {
-        return executeProtocol(new DeleteProtocol(namespace, ordered, writeConcern, deletes));
+    	long begin = System.currentTimeMillis();
+    	try {
+    		MongoQueryAnalyzer.beforeGet(namespace.getDatabaseName());
+    		return executeProtocol(new DeleteProtocol(namespace, ordered, writeConcern, deletes));
+    	} finally {
+    		MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
+    		long avgCost = (System.currentTimeMillis() - begin) / deletes.size();
+    		for (DeleteRequest r : deletes) {
+    			MongoQueryAnalyzer.logQuery("delete", namespace.getFullName(), r.getFilter(), avgCost);
+    		}
+    	}
     }
 
     @Override
@@ -105,7 +135,17 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
     @Override
     public BulkWriteResult insertCommand(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                          final List<InsertRequest> inserts) {
-        return executeProtocol(new InsertCommandProtocol(namespace, ordered, writeConcern, inserts));
+    	long begin = System.currentTimeMillis();
+    	try {
+    		MongoQueryAnalyzer.beforeGet(namespace.getDatabaseName());
+    		return executeProtocol(new InsertCommandProtocol(namespace, ordered, writeConcern, inserts));
+    	} finally {
+    		MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
+    		long avgCost = (System.currentTimeMillis() - begin) / inserts.size();
+    		for (int i=0; i<inserts.size(); i++) {
+    			MongoQueryAnalyzer.logQuery("insert", namespace.getFullName(), new BsonDocument(), avgCost);
+    		}
+    	}
     }
 
     @Override
@@ -117,7 +157,17 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
     @Override
     public BulkWriteResult updateCommand(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                          final List<UpdateRequest> updates) {
-        return executeProtocol(new UpdateCommandProtocol(namespace, ordered, writeConcern, updates));
+    	long begin = System.currentTimeMillis();
+    	try {
+    		MongoQueryAnalyzer.beforeGet(namespace.getDatabaseName());
+    		return executeProtocol(new UpdateCommandProtocol(namespace, ordered, writeConcern, updates));
+    	} finally {
+    		MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
+    		long avgCost = (System.currentTimeMillis() - begin) / updates.size();
+    		for (UpdateRequest r : updates) {
+    			MongoQueryAnalyzer.logQuery("update", namespace.getFullName(), r.getFilter(), avgCost);
+    		}
+    	}
     }
 
     @Override
@@ -129,8 +179,17 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
     @Override
     public BulkWriteResult deleteCommand(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                          final List<DeleteRequest> deletes) {
-        return executeProtocol(new DeleteCommandProtocol(namespace, ordered, writeConcern, deletes));
-
+    	long begin = System.currentTimeMillis();
+    	try {
+    		MongoQueryAnalyzer.beforeGet(namespace.getDatabaseName());
+    		return executeProtocol(new DeleteCommandProtocol(namespace, ordered, writeConcern, deletes));
+    	} finally {
+    		MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
+    		long avgCost = (System.currentTimeMillis() - begin) / deletes.size();
+    		for (DeleteRequest r : deletes) {
+    			MongoQueryAnalyzer.logQuery("delete", namespace.getFullName(), r.getFilter(), avgCost);
+    		}
+    	}
     }
 
     @Override
@@ -143,8 +202,17 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
     public <T> T command(final String database, final BsonDocument command, final boolean slaveOk,
                          final FieldNameValidator fieldNameValidator,
                          final Decoder<T> commandResultDecoder) {
-        return executeProtocol(new CommandProtocol<T>(database, command, fieldNameValidator, commandResultDecoder)
-                               .slaveOk(getSlaveOk(slaveOk)));
+    	long begin = System.currentTimeMillis();
+    	try {
+    		MongoQueryAnalyzer.beforeGet(database);
+    		return executeProtocol(new CommandProtocol<T>(database, command, fieldNameValidator, commandResultDecoder).slaveOk(getSlaveOk(slaveOk)));
+    	} finally {
+    		MongoQueryAnalyzer.afterReturn(database);
+    		if(command.containsKey("count")) {
+    			String namespace = database + "." + command.get("count").asString().getValue();
+        		MongoQueryAnalyzer.logQuery("count", namespace, command, (System.currentTimeMillis() - begin));
+    		}
+    	}
     }
 
     @Override
@@ -163,13 +231,20 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
                                     final boolean awaitData, final boolean noCursorTimeout,
                                     final boolean partial, final boolean oplogReplay,
                                     final Decoder<T> resultDecoder) {
-        return executeProtocol(new QueryProtocol<T>(namespace, skip, numberToReturn, queryDocument, fields, resultDecoder)
-                               .tailableCursor(tailableCursor)
-                               .slaveOk(getSlaveOk(slaveOk))
-                               .oplogReplay(oplogReplay)
-                               .noCursorTimeout(noCursorTimeout)
-                               .awaitData(awaitData)
-                               .partial(partial));
+        long begin = System.currentTimeMillis();
+    	try {
+    		MongoQueryAnalyzer.beforeGet(namespace.getDatabaseName());
+	        return executeProtocol(new QueryProtocol<T>(namespace, skip, numberToReturn, queryDocument, fields, resultDecoder)
+	                               .tailableCursor(tailableCursor)
+	                               .slaveOk(getSlaveOk(slaveOk))
+	                               .oplogReplay(oplogReplay)
+	                               .noCursorTimeout(noCursorTimeout)
+	                               .awaitData(awaitData)
+	                               .partial(partial));
+    	} finally {
+    		MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
+    		MongoQueryAnalyzer.logQuery("find", namespace.getFullName(), queryDocument, (System.currentTimeMillis() - begin));
+    	}
     }
 
     @Override
