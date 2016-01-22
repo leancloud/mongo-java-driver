@@ -10,7 +10,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.bson.BsonDocument;
+import org.bson.BsonInt32;
+import org.bson.BsonInt64;
 import org.bson.BsonRegularExpression;
+import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -74,6 +77,10 @@ public class MongoQueryAnalyzer {
 	}
 
 	public static void main(String[] args) {
+		
+		BsonValue v = new BsonInt64(1);
+		System.out.println(v.isNumber());
+		System.out.println(v.asNumber().longValue());
 				
 		logger.info("HELLO");
 		logger.debug("DEBUG");
@@ -254,8 +261,10 @@ public class MongoQueryAnalyzer {
 			BsonDocument o = (BsonDocument) query.get("$orderby");
 			ArrayList<String> orders = new ArrayList<String>();
 			for (String k : o.keySet()) {
-				String v = o.get(k).toString();
-				orders.add(k + ":" + v);
+				BsonValue v = o.get(k);
+				if (v.isNumber()) {
+					orders.add(k + ":" + v.asNumber().longValue());
+				}
 			}
 			orderby = joinString(orders.toArray(new String[0]), ',');
 		}
