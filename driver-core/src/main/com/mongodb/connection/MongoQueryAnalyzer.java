@@ -269,7 +269,7 @@ public class MongoQueryAnalyzer {
 			orderby = joinString(orders.toArray(new String[0]), ',');
 		}
 
-		if (q.containsKey("_id")) {
+		if (q.containsKey("_id") && time < queryThreshold) {
 			return;
 	    }
 
