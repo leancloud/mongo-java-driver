@@ -211,6 +211,9 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
     		if(command.containsKey("count")) {
     			String namespace = database + "." + command.get("count").asString().getValue();
         		MongoQueryAnalyzer.logQuery("count", namespace, command, (System.currentTimeMillis() - begin));
+    		} else if (command.containsKey("findandmodify")) {
+    			String namespace = database + "." + command.get("findandmodify").asString().getValue();
+        		MongoQueryAnalyzer.logQuery("find", namespace, command, (System.currentTimeMillis() - begin));
     		}
     	}
     }
