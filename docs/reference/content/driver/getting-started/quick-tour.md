@@ -240,8 +240,8 @@ and it should just print just one document
 
 
 {{% note %}}
-Use the [`Filters`]({{< apiref "com/mongodb/client/model/Filters">}}), [`Sorts`]({{< apiref "com/mongodb/client/model/Sorts">}}) and
-[`Projections`]({{< apiref "com/mongodb/client/model/Projections">}})
+Use the [`Filters`]({{< relref "builders/filters.md">}}), [`Sorts`]({{< relref "builders/sorts.md">}}),
+[`Projections`]({{< relref "builders/projections.md">}}) and [`Updates`]({{< relref "builders/updates.md">}})
 helpers for simple and concise ways of building up queries.
 {{% /note %}}
 
@@ -273,10 +273,10 @@ collection.find(and(gt("i", 50), lte("i", 100))).forEach(printBlock);
 
 ## Sorting documents
 
-We can also use the [`Sorts`]({{< apiref "com/mongodb/client/model/Sorts">}}) helpers to sort documents.
+We can also use the [`Sorts`]({{< relref "builders/sorts.md">}}) helpers to sort documents.
 We add a sort to a find query by calling the `sort()` method on a `FindIterable`.  Below we use the
-[`exists()`]({{ < apiref "com/mongodb/client/model/Filters.html#exists-java.lang.String-">}}) helper and sort
-[`descending("i")`]({{ < apiref "com/mongodb/client/model/Sorts.html#exists-java.lang.String-">}}) helper to
+[`exists()`]({{< relref "builders/filters.md#elements" >}}) helper and sort
+[`descending("i")`]({{<relref "builders/sorts.md#descending">}}) helper to
 sort our documents:
 
 ```java
@@ -286,15 +286,47 @@ System.out.println(myDoc.toJson());
 
 ## Projecting fields
 
-Sometimes we don't need all the data contained in a document, the [`Projections`]({{< apiref "com/mongodb/client/model/Projections">}})
-helpers help build the projection parameter for the
-find operation.  Below we'll sort the collection, exclude the `_id` field and output the first
-matching document:
+Sometimes we don't need all the data contained in a document, the [`Projections`]({{< relref "builders/projections.md">}})
+helpers help build the projection parameter for the find operation.  Below we'll sort the collection, exclude the `_id` field by using the 
+[`Projections.excludeId`]({{< relref "builders/projections.md#exclusion">}}) and output the first matching document:
 
 ```java
 myDoc = collection.find().projection(excludeId()).first();
 System.out.println(myDoc.toJson());
 ```
+## Aggregations
+
+Sometimes we need to aggregate the data stored in MongoDB. The [`Aggregates`]({{< relref "builders/aggregation.md" >}}) helper provides 
+builders for each of type of aggregation stage. 
+ 
+Below we'll do a simple two step transformation that will calculate the value of `i * 10`. First we find all Documents 
+where `i > 0` by using the [`Aggregates.match`]({{< relref "builders/aggregation.md#match" >}}) 
+helper. Then we reshape the document by using [`Aggregates.project`]({{< relref "builders/aggregation.md#project" >}}) 
+in conjunction with the [`$multiply`]({{< docsref "reference/operator/aggregation/multiply/" >}}) operator to calculate the "`ITimes10`" 
+value:
+
+```java
+collection.aggregate(asList(
+        match(gt("i", 0)),
+        project(Document.parse("{ITimes10: {$multiply: ['$i', 10]}}")))
+).forEach(printBlock);
+```
+
+For [`$group`]({{< relref "builders/aggregation.md#group" >}}) operations use the 
+[`Accumulators`]({{< apiref "com/mongodb/client/model/Accumulators" >}}) helper for any 
+[accumulator operations]({{< docsref "reference/operator/aggregation/group/#accumulator-operator" >}}). Below we sum up all the values of 
+`i` by using the [`Aggregates.group`]({{< relref "builders/aggregation.md#group" >}}) helper in conjunction with the 
+[`Accumulators.sum`]({{< apiref "com/mongodb/client/model/Accumulators#sum-java.lang.String-TExpression-" >}}) helper:
+
+```java
+myDoc = collection.aggregate(singletonList(group(null, sum("total", "$i")))).first();
+System.out.println(myDoc.toJson());
+```
+
+{{% note %}}
+Currently, there are no helpers for [aggregation expressions]({{< docsref "meta/aggregation-quick-reference/#aggregation-expressions" >}}). 
+Use the [`Document.parse()`]({{< relref "bson/extended-json.md" >}}) helper to quickly build aggregation expressions from extended JSON.
+{{% /note %}}
 
 ## Updating documents
 
@@ -302,18 +334,18 @@ There are numerous [update operators](http://docs.mongodb.org/manual/reference/o
 supported by MongoDB.
 
 To update at most a single document (may be 0 if none match the filter), use the [`updateOne`]({{< apiref "com/mongodb/client/MongoCollection.html#updateOne-org.bson.conversions.Bson-org.bson.conversions.Bson-">}})
-method to specify the filter and the update document.  Here we update the first document that meets the filter `i` equals `10` and set the value of `i` to `110`:
+method to specify the filter and the update document. Here we use the [`Updates.set`]({{< relref "builders/updates.md#set">}}) helper to update the first document that meets the filter `i` equals `10` and set the value of `i` to `110`:
 
 ```java
-collection.updateOne(eq("i", 10), new Document("$set", new Document("i", 110)));
+collection.updateOne(eq("i", 10), set("i", 110));
 ```
 
 To update all documents matching the filter use the [`updateMany`]({{< apiref "com/mongodb/async/client/MongoCollection.html#updateMany-org.bson.conversions.Bson-org.bson.conversions.Bson-">}})
-method.  Here we increment the value of `i` by `100` where `i` is less than `100`.
+method. Here we use the [`Updates.inc`]({{< relref "builders/updates.md#increment">}}) helper to increment the value of `i` by `100` 
+where `i` is less than `100`.
 
 ```java
-UpdateResult updateResult = collection.updateMany(lt("i", 100),
-          new Document("$inc", new Document("i", 100)));
+UpdateResult updateResult = collection.updateMany(lt("i", 100), inc("i", 100));
 System.out.println(updateResult.getModifiedCount());
 ```
 

@@ -9,9 +9,14 @@
         <rule-config name='MisorderedStaticImports'>
             <property name='comesBefore' value='false'/>
         </rule-config>
+        <rule-config name='NoWildcardImports'>
+            <property name='doNotApplyToFilesMatching' value='AsynchronousChannelHelperSmokeTestSpecification.groovy'/>
+        </rule-config>
     </ruleset-ref>
 
-    <ruleset-ref path='rulesets/basic.xml'/>
+    <ruleset-ref path='rulesets/basic.xml'>
+        <exclude name="ComparisonWithSelf"/>
+    </ruleset-ref>
     <ruleset-ref path='rulesets/braces.xml'/>
     <ruleset-ref path='rulesets/concurrency.xml'/>
     <ruleset-ref path='rulesets/convention.xml'>
@@ -52,6 +57,7 @@
     <ruleset-ref path='rulesets/generic.xml'/>
     <ruleset-ref path='rulesets/groovyism.xml'>
         <exclude name="ExplicitCallToAndMethod"/>
+        <exclude name="ExplicitCallToEqualsMethod"/>
         <exclude name="ExplicitCallToCompareToMethod"/>
         <exclude name='GetterMethodCouldBeProperty'/>
      </ruleset-ref>
@@ -65,6 +71,9 @@
     <ruleset-ref path='rulesets/serialization.xml'/>
     <ruleset-ref path='rulesets/size.xml'>
         <rule-config name='MethodCount'>
+            <property name='doNotApplyToFilesMatching' value='.*Specification.groovy'/>
+        </rule-config>
+        <rule-config name='ParameterCount'>
             <property name='doNotApplyToFilesMatching' value='.*Specification.groovy'/>
         </rule-config>
         <exclude name='CrapMetric'/>

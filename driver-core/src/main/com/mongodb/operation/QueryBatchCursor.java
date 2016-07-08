@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,26 +16,37 @@
 
 package com.mongodb.operation;
 
+import com.mongodb.MongoCommandException;
 import com.mongodb.MongoNamespace;
 import com.mongodb.ServerAddress;
 import com.mongodb.ServerCursor;
 import com.mongodb.binding.ConnectionSource;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.QueryResult;
+import com.mongodb.internal.validator.NoOpFieldNameValidator;
+import org.bson.BsonDocument;
+import org.bson.BsonInt32;
+import org.bson.BsonInt64;
+import org.bson.BsonString;
 import org.bson.codecs.Decoder;
 
 import java.util.List;
 import java.util.NoSuchElementException;
 
+import static com.mongodb.assertions.Assertions.isTrueArgument;
 import static com.mongodb.assertions.Assertions.notNull;
 import static com.mongodb.operation.CursorHelper.getNumberToReturn;
-import static java.util.Arrays.asList;
+import static com.mongodb.operation.OperationHelper.getMoreCursorDocumentToQueryResult;
+import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionThreeDotTwo;
+import static com.mongodb.operation.QueryHelper.translateCommandException;
+import static java.util.Collections.singletonList;
 
 class QueryBatchCursor<T> implements BatchCursor<T> {
     private final MongoNamespace namespace;
     private final int limit;
     private final Decoder<T> decoder;
     private final ConnectionSource connectionSource;
+    private final long maxTimeMS;
     private int batchSize;
     private ServerCursor serverCursor;
     private boolean killed;
@@ -43,18 +54,19 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
     private int count;
     private boolean closed;
 
-    QueryBatchCursor(final QueryResult<T> firstQueryResult, final int limit, final int batchSize,
-                     final Decoder<T> decoder) {
+    QueryBatchCursor(final QueryResult<T> firstQueryResult, final int limit, final int batchSize, final Decoder<T> decoder) {
         this(firstQueryResult, limit, batchSize, decoder, (ConnectionSource) null);
     }
 
     QueryBatchCursor(final QueryResult<T> firstQueryResult, final int limit, final int batchSize,
                      final Decoder<T> decoder, final ConnectionSource connectionSource) {
-        this(firstQueryResult, limit, batchSize, decoder, connectionSource, null);
+        this(firstQueryResult, limit, batchSize, 0, decoder, connectionSource, null);
     }
 
-    QueryBatchCursor(final QueryResult<T> firstQueryResult, final int limit, final int batchSize,
+    QueryBatchCursor(final QueryResult<T> firstQueryResult, final int limit, final int batchSize, final long maxTimeMS,
                      final Decoder<T> decoder, final ConnectionSource connectionSource, final Connection connection) {
+        isTrueArgument("maxTimeMS >= 0", maxTimeMS >= 0);
+        this.maxTimeMS = maxTimeMS;
         this.namespace = firstQueryResult.getNamespace();
         this.limit = limit;
         this.batchSize = batchSize;
@@ -70,7 +82,6 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
 
         initFromQueryResult(firstQueryResult);
         if (limitReached()) {
-            notNull("connection", connection);
             killCursor(connection);
         }
     }
@@ -194,10 +205,21 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
     private void getMore() {
         Connection connection = connectionSource.getConnection();
         try {
-            QueryResult<T> nextQueryResult = connection.getMore(namespace, serverCursor.getId(),
-                                                                getNumberToReturn(limit, batchSize, count),
-                                                                decoder);
-            initFromQueryResult(nextQueryResult);
+            if (serverIsAtLeastVersionThreeDotTwo(connection.getDescription())) {
+                try {
+                    initFromCommandResult(connection.command(namespace.getDatabaseName(),
+                                                             asGetMoreCommandDocument(),
+                                                             false,
+                                                             new NoOpFieldNameValidator(),
+                                                             CommandResultDocumentCodec.create(decoder, "nextBatch")));
+                } catch (MongoCommandException e) {
+                    throw translateCommandException(e, serverCursor);
+                }
+            } else {
+                initFromQueryResult(connection.getMore(namespace, serverCursor.getId(),
+                                                       getNumberToReturn(limit, batchSize, count),
+                                                       decoder));
+            }
             if (limitReached()) {
                 killCursor(connection);
             }
@@ -206,14 +228,35 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
         }
     }
 
+    private BsonDocument asGetMoreCommandDocument() {
+        BsonDocument document = new BsonDocument("getMore", new BsonInt64(serverCursor.getId()))
+                                .append("collection", new BsonString(namespace.getCollectionName()));
+
+        int batchSizeForGetMoreCommand = Math.abs(getNumberToReturn(limit, this.batchSize, count));
+        if (batchSizeForGetMoreCommand != 0) {
+            document.append("batchSize", new BsonInt32(batchSizeForGetMoreCommand));
+        }
+        if (maxTimeMS != 0) {
+            document.append("maxTimeMS", new BsonInt64(maxTimeMS));
+        }
+
+        return document;
+    }
+
     private void initFromQueryResult(final QueryResult<T> queryResult) {
         serverCursor = queryResult.getCursor();
         nextBatch = queryResult.getResults().isEmpty() ? null : queryResult.getResults();
         count += queryResult.getResults().size();
     }
 
+    private void initFromCommandResult(final BsonDocument getMoreCommandResultDocument) {
+        QueryResult<T> queryResult = getMoreCursorDocumentToQueryResult(getMoreCommandResultDocument.getDocument("cursor"),
+                                                                        connectionSource.getServerDescription().getAddress());
+        initFromQueryResult(queryResult);
+    }
+
     private boolean limitReached() {
-        return limit != 0 && count >= limit;
+        return Math.abs(limit) != 0 && count >= Math.abs(limit);
     }
 
     private void killCursor() {
@@ -228,9 +271,10 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
     }
 
     private void killCursor(final Connection connection) {
-        if (serverCursor != null && !killed) {
-            connection.killCursor(asList(serverCursor.getId()));
-            killed = true;
+        if (serverCursor != null) {
+            notNull("connection", connection);
+            connection.killCursor(namespace, singletonList(serverCursor.getId()));
+            serverCursor = null;
         }
     }
 }

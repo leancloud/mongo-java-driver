@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,13 @@ import com.mongodb.binding.ReadBinding;
 import com.mongodb.binding.WriteBinding;
 import com.mongodb.bulk.IndexRequest;
 import com.mongodb.bulk.InsertRequest;
+import com.mongodb.bulk.UpdateRequest;
+import com.mongodb.bulk.WriteRequest;
 import com.mongodb.client.model.CreateCollectionOptions;
+import com.mongodb.client.model.IndexOptionDefaults;
+import com.mongodb.client.model.ValidationOptions;
+import com.mongodb.client.model.geojson.codecs.GeoJsonCodecProvider;
+import com.mongodb.operation.AggregateOperation;
 import com.mongodb.operation.BatchCursor;
 import com.mongodb.operation.CountOperation;
 import com.mongodb.operation.CreateCollectionOperation;
@@ -33,9 +39,13 @@ import com.mongodb.operation.DropCollectionOperation;
 import com.mongodb.operation.DropDatabaseOperation;
 import com.mongodb.operation.FindOperation;
 import com.mongodb.operation.InsertOperation;
+import com.mongodb.operation.ListIndexesOperation;
+import com.mongodb.operation.MixedBulkWriteOperation;
 import org.bson.BsonDocument;
 import org.bson.BsonDocumentWrapper;
 import org.bson.Document;
+import org.bson.codecs.BsonDocumentCodec;
+import org.bson.codecs.BsonTypeClassMap;
 import org.bson.codecs.BsonValueCodecProvider;
 import org.bson.codecs.Codec;
 import org.bson.codecs.Decoder;
@@ -52,13 +62,15 @@ import java.util.List;
 import static com.mongodb.ClusterFixture.executeAsync;
 import static com.mongodb.ClusterFixture.getBinding;
 import static java.util.Arrays.asList;
+import static java.util.Collections.singletonList;
 
 public final class CollectionHelper<T> {
 
     private Codec<T> codec;
     private CodecRegistry registry = CodecRegistries.fromProviders(new BsonValueCodecProvider(),
                                                                    new ValueCodecProvider(),
-                                                                   new DocumentCodecProvider());
+                                                                   new DocumentCodecProvider(),
+                                                                   new GeoJsonCodecProvider());
     private MongoNamespace namespace;
 
     public CollectionHelper(final Codec<T> codec, final MongoNamespace namespace) {
@@ -83,14 +95,34 @@ public final class CollectionHelper<T> {
         }
     }
 
+    public void drop() {
+        new DropCollectionOperation(namespace).execute(getBinding());
+    }
+
     public void create(final String collectionName, final CreateCollectionOptions options) {
         drop(namespace);
-        new CreateCollectionOperation(namespace.getDatabaseName(), collectionName)
-            .capped(options.isCapped())
-            .sizeInBytes(options.getSizeInBytes())
-            .autoIndex(options.isAutoIndex())
-            .maxDocuments(options.getMaxDocuments())
-            .usePowerOf2Sizes(options.isUsePowerOf2Sizes()).execute(getBinding());
+        CreateCollectionOperation operation = new CreateCollectionOperation(namespace.getDatabaseName(), collectionName)
+                .capped(options.isCapped())
+                .sizeInBytes(options.getSizeInBytes())
+                .autoIndex(options.isAutoIndex())
+                .maxDocuments(options.getMaxDocuments())
+                .usePowerOf2Sizes(options.isUsePowerOf2Sizes());
+
+        IndexOptionDefaults indexOptionDefaults = options.getIndexOptionDefaults();
+        if (indexOptionDefaults.getStorageEngine() != null) {
+            operation.indexOptionDefaults(new BsonDocument("storageEngine", toBsonDocument(indexOptionDefaults.getStorageEngine())));
+        }
+        ValidationOptions validationOptions = options.getValidationOptions();
+        if (validationOptions.getValidator() != null) {
+            operation.validator(toBsonDocument(validationOptions.getValidator()));
+        }
+        if (validationOptions.getValidationLevel() != null) {
+            operation.validationLevel(validationOptions.getValidationLevel());
+        }
+        if (validationOptions.getValidationAction() != null) {
+            operation.validationAction(validationOptions.getValidationAction());
+        }
+        operation.execute(getBinding());
     }
 
     @SuppressWarnings("unchecked")
@@ -106,16 +138,22 @@ public final class CollectionHelper<T> {
         insertDocuments(documents, getBinding());
     }
 
+
     @SuppressWarnings("unchecked")
     public void insertDocuments(final List<BsonDocument> documents, final WriteBinding binding) {
+        insertDocuments(documents, WriteConcern.ACKNOWLEDGED, binding);
+    }
+
+    @SuppressWarnings("unchecked")
+    public void insertDocuments(final List<BsonDocument> documents, final WriteConcern writeConcern, final WriteBinding binding) {
         for (BsonDocument document : documents) {
-            new InsertOperation(namespace, true, WriteConcern.ACKNOWLEDGED,
-                                asList(new InsertRequest(document))).execute(binding);
+            new InsertOperation(namespace, true, writeConcern,
+                                singletonList(new InsertRequest(document))).execute(binding);
         }
     }
 
     public void insertDocuments(final Document... documents) {
-        insertDocuments(new DocumentCodec(), asList(documents));
+        insertDocuments(new DocumentCodec(registry, new BsonTypeClassMap()), asList(documents));
     }
 
     public <I> void insertDocuments(final Codec<I> iCodec, final I... documents) {
@@ -151,8 +189,40 @@ public final class CollectionHelper<T> {
         return results;
     }
 
+    public void updateOne(final Bson filter, final Bson update) {
+        updateOne(filter, update, false);
+    }
+
+    public void updateOne(final Bson filter, final Bson update, final boolean isUpsert) {
+        new MixedBulkWriteOperation(namespace,
+                                    singletonList(new UpdateRequest(filter.toBsonDocument(Document.class, registry),
+                                                                    update.toBsonDocument(Document.class, registry),
+                                                                    WriteRequest.Type.UPDATE)
+                                                  .upsert(isUpsert)),
+                                    true, WriteConcern.ACKNOWLEDGED)
+        .execute(getBinding());
+    }
+
     public List<T> find(final Bson filter) {
         return find(filter, null);
+    }
+
+    public List<T> aggregate(final List<Bson> pipeline) {
+        return aggregate(pipeline, codec);
+    }
+
+    public <D> List<D> aggregate(final List<Bson> pipeline, final Decoder<D> decoder) {
+        List<BsonDocument> bsonDocumentPipeline = new ArrayList<BsonDocument>();
+        for (Bson cur : pipeline) {
+            bsonDocumentPipeline.add(cur.toBsonDocument(Document.class, registry));
+        }
+        BatchCursor<D> cursor = new AggregateOperation<D>(namespace, bsonDocumentPipeline, decoder)
+                                .execute(getBinding());
+        List<D> results = new ArrayList<D>();
+        while (cursor.hasNext()) {
+            results.addAll(cursor.next());
+        }
+        return results;
     }
 
     public List<T> find(final Bson filter, final Bson sort) {
@@ -198,12 +268,16 @@ public final class CollectionHelper<T> {
         return executeAsync(new CountOperation(namespace), binding);
     }
 
-    public long count(final Document filter) {
-        return new CountOperation(namespace).filter(wrap(filter)).execute(getBinding());
+    public long count(final Bson filter) {
+        return new CountOperation(namespace).filter(toBsonDocument(filter)).execute(getBinding());
     }
 
     public BsonDocument wrap(final Document document) {
         return new BsonDocumentWrapper<Document>(document, new DocumentCodec());
+    }
+
+    public BsonDocument toBsonDocument(final Bson document) {
+        return document.toBsonDocument(BsonDocument.class, registry);
     }
 
     public void createIndex(final BsonDocument key) {
@@ -212,5 +286,27 @@ public final class CollectionHelper<T> {
 
     public void createIndex(final Document key) {
         new CreateIndexesOperation(namespace, asList(new IndexRequest(wrap(key)))).execute(getBinding());
+    }
+
+    public void createIndex(final Document key, final String defaultLanguage) {
+        new CreateIndexesOperation(namespace, asList(new IndexRequest(wrap(key)).defaultLanguage(defaultLanguage))).execute(getBinding());
+    }
+
+    public void createIndex(final Bson key) {
+        new CreateIndexesOperation(namespace, asList(new IndexRequest(key.toBsonDocument(Document.class, registry)))).execute(getBinding());
+    }
+
+    public void createIndex(final Bson key, final Double bucketSize) {
+        new CreateIndexesOperation(namespace, asList(new IndexRequest(key.toBsonDocument(Document.class, registry))
+                .bucketSize(bucketSize))).execute(getBinding());
+    }
+
+    public List<BsonDocument> listIndexes(){
+        List<BsonDocument> indexes = new ArrayList<BsonDocument>();
+        BatchCursor<BsonDocument> cursor = new ListIndexesOperation<BsonDocument>(namespace, new BsonDocumentCodec()).execute(getBinding());
+        while (cursor.hasNext()) {
+            indexes.addAll(cursor.next());
+        }
+        return indexes;
     }
 }

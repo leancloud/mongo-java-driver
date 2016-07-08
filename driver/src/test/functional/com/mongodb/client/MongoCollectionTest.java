@@ -21,6 +21,7 @@ import com.mongodb.Function;
 import com.mongodb.ReadPreference;
 import com.mongodb.WriteConcern;
 import org.bson.Document;
+import org.bson.codecs.BsonValueCodecProvider;
 import org.bson.codecs.DocumentCodec;
 import org.bson.codecs.DocumentCodecProvider;
 import org.bson.codecs.ValueCodecProvider;
@@ -29,21 +30,24 @@ import org.bson.types.ObjectId;
 import org.junit.Test;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
+import static com.mongodb.ClusterFixture.serverVersionAtLeast;
 import static java.util.Arrays.asList;
 import static org.bson.codecs.configuration.CodecRegistries.fromProviders;
 import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThat;
+import static org.junit.Assume.assumeTrue;
 
 public class MongoCollectionTest extends DatabaseTestCase {
 
     @Test
     public void testFindAndUpdateWithGenerics() {
         CodecRegistry codecRegistry = fromProviders(asList(new ValueCodecProvider(), new DocumentCodecProvider(),
-                new ConcreteCodecProvider()));
+                new BsonValueCodecProvider(), new ConcreteCodecProvider()));
         MongoCollection<Concrete> collection = database
                 .getCollection(getCollectionName())
                 .withDocumentClass(Concrete.class)
@@ -65,7 +69,7 @@ public class MongoCollectionTest extends DatabaseTestCase {
     public void shouldBeAbleToQueryTypedCollectionAndMapResultsIntoTypedLists() {
         // given
         CodecRegistry codecRegistry = fromProviders(asList(new ValueCodecProvider(), new DocumentCodecProvider(),
-                new ConcreteCodecProvider()));
+                new BsonValueCodecProvider(), new ConcreteCodecProvider()));
         MongoCollection<Concrete> collection = database
                 .getCollection(getCollectionName())
                 .withDocumentClass(Concrete.class)
@@ -137,12 +141,35 @@ public class MongoCollectionTest extends DatabaseTestCase {
         assertEquals(new Name("Sam", 1), result.get(1));
     }
 
+    @Test
+    public void testAggregationToACollection() {
+        assumeTrue(serverVersionAtLeast(asList(2, 6, 0)));
+
+        // given
+        List<Document> documents = asList(new Document("_id", 1), new Document("_id", 2));
+
+        getCollectionHelper().insertDocuments(new DocumentCodec(), documents);
+
+        MongoCollection<Document> collection = database
+                .getCollection(getCollectionName());
+
+        // when
+        List<Document> result = collection.aggregate(Collections.singletonList(new Document("$out", "outCollection")))
+                .into(new ArrayList<Document>());
+
+        // then
+        assertEquals(documents, result);
+    }
+
     // This is really a test that the default registry created in MongoClient and passed down to MongoCollection has been constructed
     // properly to handle DBRef encoding and decoding
     @Test
     public void testDBRefEncodingAndDecoding() {
         // given
-        Document doc = new Document("_id", 1).append("ref", new DBRef("foo", 5));
+        Document doc = new Document("_id", 1)
+                               .append("ref", new DBRef("foo", 5))
+                               .append("refWithDB", new DBRef("db", "foo", 5));
+
 
         // when
         collection.insertOne(doc);

@@ -27,9 +27,6 @@ import com.mongodb.connection.SocketSettings;
 import com.mongodb.connection.SslSettings;
 import org.bson.Document;
 
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeoutException;
-
 import static com.mongodb.connection.ClusterType.SHARDED;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -50,31 +47,34 @@ public final class Fixture {
 
     public static synchronized MongoClient getMongoClient() {
         if (mongoClient == null) {
-            SslSettings.Builder sslSettingsBuilder = SslSettings.builder().applyConnectionString(getConnectionString());
-            if (System.getProperty("java.version").startsWith("1.6.")) {
-                sslSettingsBuilder.invalidHostNameAllowed(true);
-            }
-            ClusterSettings clusterSettings = ClusterSettings.builder()
-                                                             .applyConnectionString(getConnectionString())
-                                                             .build();
-            ConnectionPoolSettings connectionPoolSettings = ConnectionPoolSettings.builder()
-                                                                                  .applyConnectionString(getConnectionString())
-                                                                                  .build();
-            SocketSettings socketSettings = SocketSettings.builder()
-                                                          .applyConnectionString(getConnectionString())
-                                                          .build();
-            MongoClientSettings settings = MongoClientSettings.builder()
-                                                           .clusterSettings(clusterSettings)
-                                                           .connectionPoolSettings(connectionPoolSettings)
-                                                           .serverSettings(ServerSettings.builder().build())
-                                                           .credentialList(getConnectionString().getCredentialList())
-                                                           .sslSettings(sslSettingsBuilder.build())
-                                                           .socketSettings(socketSettings)
-                                                           .build();
-            mongoClient = (MongoClientImpl) MongoClients.create(settings);
+            MongoClientSettings.Builder builder = getMongoClientBuilderFromConnectionString();
+            mongoClient = (MongoClientImpl) MongoClients.create(builder.build());
             Runtime.getRuntime().addShutdownHook(new ShutdownHook());
         }
         return mongoClient;
+    }
+
+    public static MongoClientSettings.Builder getMongoClientBuilderFromConnectionString() {
+        SslSettings.Builder sslSettingsBuilder = SslSettings.builder().applyConnectionString(getConnectionString());
+        if (System.getProperty("java.version").startsWith("1.6.")) {
+            sslSettingsBuilder.invalidHostNameAllowed(true);
+        }
+        ClusterSettings clusterSettings = ClusterSettings.builder()
+                                                         .applyConnectionString(getConnectionString())
+                                                         .build();
+        ConnectionPoolSettings connectionPoolSettings = ConnectionPoolSettings.builder()
+                                                                              .applyConnectionString(getConnectionString())
+                                                                              .build();
+        SocketSettings socketSettings = SocketSettings.builder()
+                                                      .applyConnectionString(getConnectionString())
+                                                      .build();
+        return MongoClientSettings.builder()
+                .clusterSettings(clusterSettings)
+                .connectionPoolSettings(connectionPoolSettings)
+                .serverSettings(ServerSettings.builder().build())
+                .credentialList(getConnectionString().getCredentialList())
+                .sslSettings(sslSettingsBuilder.build())
+                .socketSettings(socketSettings);
     }
 
     public static synchronized ConnectionString getConnectionString() {
@@ -95,8 +95,7 @@ public final class Fixture {
         return getMongoClient().getDatabase(getDefaultDatabaseName());
     }
 
-    public static MongoCollection<Document> initializeCollection(final MongoNamespace namespace)
-    throws InterruptedException, ExecutionException, TimeoutException {
+    public static MongoCollection<Document> initializeCollection(final MongoNamespace namespace) {
         MongoDatabase database = getMongoClient().getDatabase(namespace.getDatabaseName());
         try {
             FutureResultCallback<Document> futureResultCallback = new FutureResultCallback<Document>();
@@ -106,6 +105,8 @@ public final class Fixture {
             if (!e.getErrorMessage().startsWith("ns not found")) {
                 throw e;
             }
+        } catch (Throwable t) {
+            throw new RuntimeException(t);
         }
         return database.getCollection(namespace.getCollectionName());
     }
@@ -115,7 +116,7 @@ public final class Fixture {
         return mongoClient.getCluster().getDescription().getType() == SHARDED;
     }
 
-    public static void dropDatabase(final String name) throws InterruptedException, ExecutionException, TimeoutException {
+    public static void dropDatabase(final String name) {
         if (name == null) {
             return;
         }
@@ -128,10 +129,12 @@ public final class Fixture {
             if (!e.getErrorMessage().startsWith("ns not found")) {
                 throw e;
             }
+        } catch (Throwable t) {
+            throw new RuntimeException(t);
         }
     }
 
-    public static void drop(final MongoNamespace namespace) throws ExecutionException, InterruptedException {
+    public static void drop(final MongoNamespace namespace) {
         try {
             FutureResultCallback<Document> futureResultCallback = new FutureResultCallback<Document>();
             getMongoClient().getDatabase(namespace.getDatabaseName())
@@ -141,6 +144,8 @@ public final class Fixture {
             if (!e.getErrorMessage().contains("ns not found")) {
                 throw e;
             }
+        } catch (Throwable t) {
+            throw new RuntimeException(t);
         }
     }
 

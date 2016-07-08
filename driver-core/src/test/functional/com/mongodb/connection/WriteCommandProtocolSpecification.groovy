@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,8 +18,8 @@
 package com.mongodb.connection
 
 import category.Slow
-import com.mongodb.OperationFunctionalSpecification
 import com.mongodb.MongoBulkWriteException
+import com.mongodb.OperationFunctionalSpecification
 import com.mongodb.bulk.BulkWriteUpsert
 import com.mongodb.bulk.InsertRequest
 import com.mongodb.bulk.UpdateRequest
@@ -31,26 +31,29 @@ import org.bson.BsonInt32
 import org.bson.codecs.BsonDocumentCodec
 import org.junit.experimental.categories.Category
 import spock.lang.IgnoreIf
+import spock.lang.Shared
 
 import static com.mongodb.ClusterFixture.getCredentialList
 import static com.mongodb.ClusterFixture.getPrimary
 import static com.mongodb.ClusterFixture.getSslSettings
 import static com.mongodb.ClusterFixture.serverVersionAtLeast
 import static com.mongodb.WriteConcern.ACKNOWLEDGED
+import static com.mongodb.connection.ProtocolTestHelper.execute
 
 @IgnoreIf({ !serverVersionAtLeast([2, 6, 0]) })
 class WriteCommandProtocolSpecification extends OperationFunctionalSpecification {
 
+    @Shared
     InternalStreamConnection connection;
 
-    def setup() {
+    def setupSpec() {
         connection = new InternalStreamConnectionFactory(new NettyStreamFactory(SocketSettings.builder().build(), getSslSettings()),
-                                                         getCredentialList(), new NoOpConnectionListener())
+                getCredentialList(), new NoOpConnectionListener())
                 .create(new ServerId(new ClusterId(), getPrimary()))
         connection.open();
     }
 
-    def cleanup() {
+    def cleanupSpec() {
         connection?.close()
     }
 
@@ -59,39 +62,46 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
         def document = new BsonDocument('_id', new BsonInt32(1))
 
         def insertRequest = [new InsertRequest(document)]
-        def protocol = new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, insertRequest)
+        def protocol = new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, null, insertRequest)
+
         when:
-        def result = protocol.execute(connection)
+        def result = execute(protocol, connection, async)
 
         then:
         result.insertedCount == 1
         result.upserts == []
         collectionHelper.find(document, new BsonDocumentCodec()).first() == document
+
+        where:
+        async << [false, true]
     }
 
     def 'should insert documents'() {
         def requests = [new InsertRequest(new BsonDocument('_id', new BsonInt32(1))),
                         new InsertRequest(new BsonDocument('_id', new BsonInt32(2)))]
         given:
-        def protocol = new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, requests
-        )
+        def protocol = new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, null, requests)
+
         when:
-        protocol.execute(connection)
+        execute(protocol, connection, async)
 
         then:
         collectionHelper.count() == 2
+
+        where:
+        async << [false, true]
     }
 
     def 'should throw exception'() {
         given:
-        def protocol = new InsertCommandProtocol(getNamespace(), false, ACKNOWLEDGED,
-                                                 [new InsertRequest(new BsonDocument('_id', new BsonInt32(1))),
-                                                  new InsertRequest(new BsonDocument('_id', new BsonInt32(2)))]
+        def protocol = new InsertCommandProtocol(getNamespace(), false, ACKNOWLEDGED, false,
+                [new InsertRequest(new BsonDocument('_id', new BsonInt32(1))),
+                 new InsertRequest(new BsonDocument('_id', new BsonInt32(2)))]
         )
         protocol.execute(connection)
 
         when:
-        protocol.execute(connection)  // now do it again
+        execute(protocol, connection, async)
 
         then:
         def e = thrown(MongoBulkWriteException)
@@ -110,6 +120,9 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
             code == 11000
             message != null
         }
+
+        where:
+        async << [false, true]
     }
 
     @Category(Slow)
@@ -128,14 +141,17 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
         for (def cur : documents) {
             insertList.add(new InsertRequest(cur));
         }
-        def protocol = new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, insertList)
+        def protocol = new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, null, insertList)
 
         when:
-        def result = protocol.execute(connection)
+        def result = execute(protocol, connection, async)
 
         then:
         result.insertedCount == 4
         documents.size() == collectionHelper.count()
+
+        where:
+        async << [false, true]
     }
 
     @Category(Slow)
@@ -156,17 +172,20 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
         }
 
         // Force a duplicate key error in the second insert request
-        new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, [new InsertRequest(new BsonDocument('_id', new BsonInt32(2)))])
+        new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, null, [new InsertRequest(new BsonDocument('_id', new BsonInt32(2)))])
                 .execute(connection)
 
-        def protocol = new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, insertList)
+        def protocol = new InsertCommandProtocol(getNamespace(), true, ACKNOWLEDGED, null, insertList)
 
         when:
-        protocol.execute(connection)
+        execute(protocol, connection, async)
 
         then:
         def exception = thrown(MongoBulkWriteException)
         exception.writeResult.insertedCount == 1
+
+        where:
+        async << [false, true]
     }
 
     @Category(Slow)
@@ -185,7 +204,7 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
         for (def cur : documents) {
             insertList.add(new InsertRequest(cur));
         }
-        new InsertCommandProtocol(getNamespace(), false, ACKNOWLEDGED, insertList).execute(connection)
+        new InsertCommandProtocol(getNamespace(), false, ACKNOWLEDGED, null, insertList).execute(connection)
 
         // add a large byte array to each document to force a split after each
         for (def document : documents) {
@@ -193,10 +212,10 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
         }
         documents[1].put('_id', new BsonInt32(5))  // Make the second document a new one
 
-        def protocol = new InsertCommandProtocol(getNamespace(), false, ACKNOWLEDGED, insertList)
+        def protocol = new InsertCommandProtocol(getNamespace(), false, ACKNOWLEDGED, null, insertList)
 
         when:
-        protocol.execute(connection)
+        execute(protocol, connection, async)
 
         then:
         def e = thrown(MongoBulkWriteException)
@@ -205,26 +224,33 @@ class WriteCommandProtocolSpecification extends OperationFunctionalSpecification
         e.writeErrors[0].index == 0
         e.writeErrors[1].index == 2
         e.writeErrors[2].index == 3
+
+        where:
+        async << [false, true]
     }
 
     def 'should upsert items'() {
         given:
-        def protocol = new UpdateCommandProtocol(getNamespace(), true, ACKNOWLEDGED,
-                                                 [new UpdateRequest(new BsonDocument('_id', new BsonInt32(1)),
-                                                                    new BsonDocument('$set', new BsonDocument('x', new BsonInt32(1))),
-                                                                    WriteRequest.Type.UPDATE)
-                                                          .upsert(true),
-                                                  new UpdateRequest(new BsonDocument('_id', new BsonInt32(2)),
-                                                                    new BsonDocument('$set', new BsonDocument('x', new BsonInt32(2))),
-                                                                    WriteRequest.Type.UPDATE)
-                                                          .upsert(true)]
+        def protocol = new UpdateCommandProtocol(getNamespace(), true, ACKNOWLEDGED, null,
+                [new UpdateRequest(new BsonDocument('_id', new BsonInt32(1)),
+                        new BsonDocument('$set', new BsonDocument('x', new BsonInt32(1))),
+                        WriteRequest.Type.UPDATE)
+                         .upsert(true),
+                 new UpdateRequest(new BsonDocument('_id', new BsonInt32(2)),
+                         new BsonDocument('$set', new BsonDocument('x', new BsonInt32(2))),
+                         WriteRequest.Type.UPDATE)
+                         .upsert(true)]
         );
 
         when:
-        def result = protocol.execute(connection);
+        def result = execute(protocol, connection, async)
+
 
         then:
         result.matchedCount == 0;
         result.upserts == [new BulkWriteUpsert(0, new BsonInt32(1)), new BulkWriteUpsert(1, new BsonInt32(2))]
+
+        where:
+        async << [false, true]
     }
 }

@@ -1,0 +1,218 @@
+#########################################
+#      Java Driver Config for Evergreen #
+#########################################
+
+java_driver_variables:
+## Common download urls (merge in as hashes)
+  mongo_download_url_prefixes:
+    linux64: &mongo_url_linux64
+      mongo_url_prefix: "http://downloads.mongodb.org/linux/mongodb-linux-x86_64-"
+    ubuntu1404: &mongo_url_ubuntu1404
+      mongo_url_platform: "ubuntu1404-"
+      <<: *mongo_url_linux64
+
+#######################################
+#            Functions                #
+#######################################
+
+functions:
+  "fetch source" :
+      command: git.get_project
+      params:
+          directory: "mongo-java-driver"
+
+  "set topology standalone" :
+    command: expansions.update
+    params:
+      updates:
+        - key: "orchestration_file"
+          value: "basic.json"
+        - key: "topology_type"
+          value: "server"
+        - key: "mongodb_test_uri"
+          value: "mongodb://localhost:27017"
+        - key: "rs_enabled"
+          value: "false"
+
+
+  "set topology replica set" :
+    command: expansions.update
+    params:
+      updates:
+        - key: "orchestration_file"
+          value: "basic.json"
+        - key: "topology_type"
+          value: "replica_set"
+        - key: "mongodb_test_uri"
+          value: "mongodb://localhost:27017,localhost:27018"
+        - key: "rs_enabled"
+          value: "true"
+
+  "set topology sharded" :
+    command: expansions.update
+    params:
+      updates:
+        - key: "orchestration_file"
+          value: "basic.json"
+        - key: "topology_type"
+          value: "sharded_cluster"
+        - key: "mongodb_test_uri"
+          value: "mongodb://localhost:27017"
+        - key: "rs_enabled"
+          value: "false"
+
+  "set version latest" :
+    command: expansions.update
+    params:
+      updates:
+        - key: "mongo_url"
+          value: ${mongo_url_prefix}${mongo_url_platform|}latest.${mongo_url_extension|tgz}
+
+  "fetch mongodb" :
+    command: shell.exec
+    params:
+      working_dir: "mongo-java-driver"
+      script: |
+        set -o verbose
+        set -o errexit
+        ls -la
+        curl -s ${mongo_url} --output mongo-archive.${ext|tgz}
+        ${decompress} mongo-archive.${ext|tgz}
+        mv mongodb* mongodb
+        chmod +x ./mongodb/bin/mongod${extension}
+        if [ ${windows|false} = true ]; then
+            rm -rf /cygdrive/c/mongodb
+            cp -r mongodb /cygdrive/c/mongodb
+        fi
+
+  "run tests" :
+    command: shell.exec
+    params:
+      working_dir: "mongo-java-driver"
+      script: |
+        export ORCHESTRATION_FILE="orchestration_configs/${topology_type}s/${orchestration_file}"
+
+        mkdir -p $(dirname "$ORCHESTRATION_FILE")
+
+        # Borrow MO config from the C driver
+        #
+        curl --location "https://raw.githubusercontent.com/mongodb/mongo-c-driver/master/orchestration_configs/${topology_type}s/${orchestration_file}" > "$ORCHESTRATION_FILE"
+        export ORCHESTRATION_URL="http://localhost:8889/v1/${topology_type}s"
+        export MONGO_ORCHESTRATION_HOME=/tmp/orchestration-home
+
+        if [ ! -d /tmp/orchestration-home ]; then
+           mkdir /tmp/orchestration-home
+        fi
+
+        ${start_mongo_orchestration}
+        ${start_topology}
+        ./gradlew -Dorg.mongodb.test.uri=${mongodb_test_uri} -Prs.enabled=${rs_enabled} --stacktrace --info test
+
+  "attach junit results" :
+    command: attach.xunit_results
+    params:
+      file: ./mongo-java-driver/*/build/test-results/TEST-*.xml
+
+#######################################
+#               Tasks                 #
+#######################################
+
+tasks:
+    - name: compileAndAnalyze
+      commands:
+        - func: "fetch source"
+        - command: git.apply_patch
+          params:
+              directory: "mongo-java-driver"
+        - command: shell.exec
+          params:
+              working_dir: "mongo-java-driver"
+              script: |
+                  ./gradlew -PxmlReports.enabled=true --info -x test clean check jar testClasses
+    - name: test-standalone
+      commands:
+        - func: "fetch source"
+        - command: git.apply_patch
+          params:
+              directory: "mongo-java-driver"
+        - func: "set topology standalone"
+        - func: "set version latest"
+        - func: "fetch mongodb"
+        - func: "run tests"
+        - func: "attach junit results"
+    - name: test-replica-set
+      commands:
+        - func: "fetch source"
+        - command: git.apply_patch
+          params:
+              directory: "mongo-java-driver"
+        - func: "set topology replica set"
+        - func: "set version latest"
+        - func: "fetch mongodb"
+        - func: "run tests"
+        - func: "attach junit results"
+    - name: test-sharded
+      commands:
+        - func: "fetch source"
+        - command: git.apply_patch
+          params:
+              directory: "mongo-java-driver"
+        - func: "set topology sharded"
+        - func: "set version latest"
+        - func: "fetch mongodb"
+        - func: "run tests"
+        - func: "attach junit results"
+
+scripts:
+  ## Scripts that are shared between buildvariants
+  scripts:
+    mongo_orchestration:
+      unix: &mongo_orchestration_unix
+        start_mongo_orchestration: |
+          trap 'set +o errexit; mongo-orchestration --pidfile /data/mo.pid stop;' EXIT
+          pidfile=/data/mo.pid
+          if [ -f $pidfile ]; then
+            echo "Existing pidfile $pidfile"
+            cat $pidfile
+            mongo-orchestration --pidfile /data/mo.pid stop;
+            rm -f $pidfile
+          fi
+          df -h
+          ls -la
+          echo "Starting Mongo Orchestration..."
+          echo "{ \"releases\": { \"default\": \"`pwd`/mongodb/bin\" } }" > orchestration.config
+          TMPDIR=/data/db mongo-orchestration -f orchestration.config -e default start --socket-timeout-ms=60000 --bind=127.0.0.1  --enable-majority-read-concern --pidfile $pidfile
+          curl -s http://localhost:8889/
+      start_topology_command: &start_topology_command
+        start_topology: |
+          curl -s --data @"$ORCHESTRATION_FILE" "$ORCHESTRATION_URL"
+          ./mongodb/bin/mongo $MONGO_SHELL_CONNECTION_FLAGS --eval 'printjson(db.serverBuildInfo())' admin
+          ./mongodb/bin/mongo $MONGO_SHELL_CONNECTION_FLAGS --eval 'printjson(db.adminCommand({getCmdLineOpts:1}))' admin
+          ./mongodb/bin/mongo $MONGO_SHELL_CONNECTION_FLAGS --eval 'printjson(db.isMaster())' admin
+
+#######################################
+#               Variants              #
+#######################################
+
+buildvariants:
+- name: ubuntu-1404
+  display_name: "Ubuntu-1404"
+  expansions:
+    <<: *start_topology_command
+    <<: *mongo_url_ubuntu1404 # sets ${mongo_url_prefix}
+    <<: *mongo_orchestration_unix # sets start_topology and start_mongo_orchestration
+  run_on:
+    - ubuntu1404-test
+  tasks:
+  - name: compileAndAnalyze
+    run_on:
+    - ubuntu1404-build
+  - name: test-standalone
+    depends_on:
+     - name: compileAndAnalyze
+  - name: test-replica-set
+    depends_on:
+     - name: compileAndAnalyze
+  - name: test-sharded
+    depends_on:
+     - name: compileAndAnalyze

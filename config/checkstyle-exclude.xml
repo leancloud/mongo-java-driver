@@ -35,6 +35,10 @@
     <!--Do not check test classes -->
     <suppress checks="Javadoc*" files=".*test.*"/>
 
+    <!--Do not check The GridFSTour -->
+    <suppress checks="Regexp" files="GridFSTour"/>
+    <suppress checks="MethodLength" files="GridFSTour"/>
+
     <!--DBCollection is insanely long, and we should not compromise every class length for this one-->
     <suppress checks="FileLength" files="DBCollection"/>
 
@@ -57,6 +61,8 @@
     <suppress checks="ConstantName" files="JSONCallback"/>
     <suppress checks="ConstantName" files="Mongo"/>
     <suppress checks="ConstantName" files="ReflectionDBObject"/>
+
+    <suppress checks="JavadocMethod" files="BasicDBObject"/>
 
     <suppress checks="MethodName" files="BasicBSONCallback"/>
     <suppress checks="MethodName" files="BasicBSONEncoder"/>
@@ -86,4 +92,9 @@
     <suppress checks="HideUtilityClassConstructor" files="JSON"/>
     <suppress checks="HideUtilityClassConstructor" files="QuickTour"/>
     <suppress checks="HideUtilityClassConstructor" files="Util"/>
+
+    <!-- Alternative copyrights -->
+    <suppress checks="RegexpSingleline" files="Immutable"/>
+    <suppress checks="RegexpSingleline" files="NotThreadSafe"/>
+    <suppress checks="RegexpSingleline" files="ThreadSafe"/>
 </suppressions>

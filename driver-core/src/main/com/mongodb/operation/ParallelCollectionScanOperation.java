@@ -16,8 +16,8 @@
 
 package com.mongodb.operation;
 
-import com.mongodb.Function;
 import com.mongodb.MongoNamespace;
+import com.mongodb.ReadConcern;
 import com.mongodb.ServerAddress;
 import com.mongodb.async.AsyncBatchCursor;
 import com.mongodb.async.SingleResultCallback;
@@ -28,6 +28,7 @@ import com.mongodb.binding.ReadBinding;
 import com.mongodb.connection.AsyncConnection;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.QueryResult;
+import com.mongodb.operation.CommandOperationHelper.CommandTransformer;
 import org.bson.BsonArray;
 import org.bson.BsonDocument;
 import org.bson.BsonInt32;
@@ -45,6 +46,8 @@ import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommand
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocolAsync;
 import static com.mongodb.operation.OperationHelper.AsyncCallableWithConnectionAndSource;
 import static com.mongodb.operation.OperationHelper.CallableWithConnectionAndSource;
+import static com.mongodb.operation.OperationHelper.LOGGER;
+import static com.mongodb.operation.OperationHelper.checkValidReadConcern;
 import static com.mongodb.operation.OperationHelper.cursorDocumentToQueryResult;
 import static com.mongodb.operation.OperationHelper.releasingCallback;
 import static com.mongodb.operation.OperationHelper.withConnection;
@@ -59,12 +62,14 @@ import static com.mongodb.operation.OperationHelper.withConnection;
  * @mongodb.server.release 2.6
  * @since 3.0
  */
-public class ParallelCollectionScanOperation<T> implements AsyncReadOperation<List<AsyncBatchCursor<T>>>,
+public class
+ParallelCollectionScanOperation<T> implements AsyncReadOperation<List<AsyncBatchCursor<T>>>,
                                                            ReadOperation<List<BatchCursor<T>>> {
     private final MongoNamespace namespace;
     private final int numCursors;
     private int batchSize = 0;
     private final Decoder<T> decoder;
+    private ReadConcern readConcern = ReadConcern.DEFAULT;
 
     /**
      * Construct a new instance.
@@ -113,14 +118,38 @@ public class ParallelCollectionScanOperation<T> implements AsyncReadOperation<Li
         return this;
     }
 
+    /**
+     * Gets the read concern
+     *
+     * @return the read concern
+     * @since 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    public ReadConcern getReadConcern() {
+        return readConcern;
+    }
+
+    /**
+     * Sets the read concern
+     * @param readConcern the read concern
+     * @return this
+     * @since 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    public ParallelCollectionScanOperation<T> readConcern(final ReadConcern readConcern) {
+        this.readConcern = notNull("readConcern", readConcern);
+        return this;
+    }
+
     @Override
     public List<BatchCursor<T>> execute(final ReadBinding binding) {
         return withConnection(binding, new CallableWithConnectionAndSource<List<BatchCursor<T>>>() {
             @Override
             public List<BatchCursor<T>> call(final ConnectionSource source, final Connection connection) {
-                return executeWrappedCommandProtocol(namespace.getDatabaseName(), getCommand(),
+                checkValidReadConcern(connection, readConcern);
+                return executeWrappedCommandProtocol(binding, namespace.getDatabaseName(), getCommand(),
                                                      CommandResultDocumentCodec.create(decoder, "firstBatch"), connection,
-                                                     binding.getReadPreference(), transformer(source));
+                                                     transformer(source));
             }
         });
     }
@@ -130,22 +159,33 @@ public class ParallelCollectionScanOperation<T> implements AsyncReadOperation<Li
         withConnection(binding, new AsyncCallableWithConnectionAndSource() {
             @Override
             public void call(final AsyncConnectionSource source, final AsyncConnection connection, final Throwable t) {
+                SingleResultCallback<List<AsyncBatchCursor<T>>> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 if (t != null) {
-                    errorHandlingCallback(callback).onResult(null, t);
+                    errHandlingCallback.onResult(null, t);
                 } else {
-                    executeWrappedCommandProtocolAsync(namespace.getDatabaseName(), getCommand(),
-                                                       CommandResultDocumentCodec.create(decoder, "firstBatch"), connection,
-                                                       binding.getReadPreference(), asyncTransformer(source),
-                                                       releasingCallback(errorHandlingCallback(callback), source, connection));
+                    final SingleResultCallback<List<AsyncBatchCursor<T>>> wrappedCallback = releasingCallback(
+                            errHandlingCallback, source, connection);
+                    checkValidReadConcern(source, connection, readConcern, new AsyncCallableWithConnectionAndSource() {
+                        @Override
+                        public void call(final AsyncConnectionSource source, final AsyncConnection connection, final Throwable t) {
+                            if (t != null) {
+                                wrappedCallback.onResult(null, t);
+                            } else {
+                                executeWrappedCommandProtocolAsync(binding, namespace.getDatabaseName(), getCommand(),
+                                        CommandResultDocumentCodec.create(decoder, "firstBatch"), connection,
+                                        asyncTransformer(source, connection), wrappedCallback);
+                            }
+                        }
+                    });
                 }
             }
         });
     }
 
-    private Function<BsonDocument, List<BatchCursor<T>>> transformer(final ConnectionSource source) {
-        return new Function<BsonDocument, List<BatchCursor<T>>>() {
+    private CommandTransformer<BsonDocument, List<BatchCursor<T>>> transformer(final ConnectionSource source) {
+        return new CommandTransformer<BsonDocument, List<BatchCursor<T>>>() {
             @Override
-            public List<BatchCursor<T>> apply(final BsonDocument result) {
+            public List<BatchCursor<T>> apply(final BsonDocument result, final ServerAddress serverAddress) {
                 List<BatchCursor<T>> cursors = new ArrayList<BatchCursor<T>>();
                 for (BsonValue cursorValue : getCursorDocuments(result)) {
                     cursors.add(new QueryBatchCursor<T>(createQueryResult(getCursorDocument(cursorValue.asDocument()),
@@ -157,16 +197,16 @@ public class ParallelCollectionScanOperation<T> implements AsyncReadOperation<Li
         };
     }
 
-    private Function<BsonDocument, List<AsyncBatchCursor<T>>> asyncTransformer(final AsyncConnectionSource source) {
-        return new Function<BsonDocument, List<AsyncBatchCursor<T>>>() {
+    private CommandTransformer<BsonDocument, List<AsyncBatchCursor<T>>> asyncTransformer(final AsyncConnectionSource source,
+                                                                               final AsyncConnection connection) {
+        return new CommandTransformer<BsonDocument, List<AsyncBatchCursor<T>>>() {
             @Override
-            public List<AsyncBatchCursor<T>> apply(final BsonDocument result) {
+            public List<AsyncBatchCursor<T>> apply(final BsonDocument result, final ServerAddress serverAddress) {
                 List<AsyncBatchCursor<T>> cursors = new ArrayList<AsyncBatchCursor<T>>();
                 for (BsonValue cursorValue : getCursorDocuments(result)) {
                     cursors.add(new AsyncQueryBatchCursor<T>(createQueryResult(getCursorDocument(cursorValue.asDocument()),
                                                                                           source.getServerDescription().getAddress()),
-                                                             0, getBatchSize(), decoder, source
-                    ));
+                                                             0, getBatchSize(), 0, decoder, source, connection));
                 }
                 return cursors;
             }
@@ -188,7 +228,11 @@ public class ParallelCollectionScanOperation<T> implements AsyncReadOperation<Li
     }
 
     private BsonDocument getCommand() {
-        return new BsonDocument("parallelCollectionScan", new BsonString(namespace.getCollectionName()))
+        BsonDocument document = new BsonDocument("parallelCollectionScan", new BsonString(namespace.getCollectionName()))
                .append("numCursors", new BsonInt32(getNumCursors()));
+        if (!readConcern.isServerDefault()) {
+            document.put("readConcern", readConcern.asDocument());
+        }
+        return document;
     }
 }

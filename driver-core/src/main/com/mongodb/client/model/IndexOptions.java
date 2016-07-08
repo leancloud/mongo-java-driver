@@ -18,11 +18,7 @@ package com.mongodb.client.model;
 
 import org.bson.conversions.Bson;
 
-import java.util.List;
 import java.util.concurrent.TimeUnit;
-
-import static com.mongodb.assertions.Assertions.isTrueArgument;
-import static java.util.Arrays.asList;
 
 /**
  * The options to apply to the creation of an index.
@@ -31,8 +27,6 @@ import static java.util.Arrays.asList;
  * @since 3.0
  */
 public class IndexOptions {
-    private static final List<Integer> VALID_TEXT_INDEX_VERSIONS = asList(1, 2);
-    private static final List<Integer> VALID_SPHERE_INDEX_VERSIONS = asList(1, 2);
     private boolean background;
     private boolean unique;
     private String name;
@@ -49,6 +43,7 @@ public class IndexOptions {
     private Double max;
     private Double bucketSize;
     private Bson storageEngine;
+    private Bson partialFilterExpression;
 
     /**
      * Create the index in the background
@@ -277,9 +272,6 @@ public class IndexOptions {
      * @return this
      */
     public IndexOptions textVersion(final Integer textVersion) {
-        if (textVersion != null) {
-            isTrueArgument("textVersion must be 1 or 2", VALID_TEXT_INDEX_VERSIONS.contains(textVersion));
-        }
         this.textVersion = textVersion;
         return this;
     }
@@ -300,9 +292,6 @@ public class IndexOptions {
      * @return this
      */
     public IndexOptions sphereVersion(final Integer sphereVersion) {
-        if (sphereVersion != null) {
-            isTrueArgument("sphereIndexVersion must be 1 or 2", VALID_SPHERE_INDEX_VERSIONS.contains(sphereVersion));
-        }
         this.sphereVersion = sphereVersion;
         return this;
     }
@@ -402,12 +391,36 @@ public class IndexOptions {
     /**
      * Sets the storage engine options document for this index.
      *
-     * @param storageEngine the storate engine options
+     * @param storageEngine the storage engine options
      * @return this
      * @mongodb.server.release 3.0
      */
     public IndexOptions storageEngine(final Bson storageEngine) {
         this.storageEngine = storageEngine;
+        return this;
+    }
+
+    /**
+     * Get the filter expression for the documents to be included in the index or null if not set
+     *
+     * @return the filter expression for the documents to be included in the index or null if not set
+     * @mongodb.server.release 3.2
+     * @since 3.2
+     */
+    public Bson getPartialFilterExpression() {
+        return partialFilterExpression;
+    }
+
+    /**
+     * Sets the filter expression for the documents to be included in the index
+     *
+     * @param partialFilterExpression the filter expression for the documents to be included in the index
+     * @return this
+     * @mongodb.server.release 3.2
+     * @since 3.2
+     */
+    public IndexOptions partialFilterExpression(final Bson partialFilterExpression) {
+        this.partialFilterExpression = partialFilterExpression;
         return this;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,12 @@ import com.mongodb.WriteConcernResult
 import com.mongodb.async.FutureResultCallback
 import com.mongodb.async.SingleResultCallback
 import com.mongodb.bulk.InsertRequest
+import com.mongodb.event.CommandListener
+import com.mongodb.event.ServerListener
+import com.mongodb.internal.validator.NoOpFieldNameValidator
 import org.bson.BsonDocument
+import org.bson.BsonInt32
+import org.bson.codecs.BsonDocumentCodec
 import spock.lang.Specification
 
 import java.util.concurrent.CountDownLatch
@@ -42,6 +47,8 @@ import static java.util.concurrent.TimeUnit.SECONDS
 
 class DefaultServerSpecification extends Specification {
 
+    def serverId = new ServerId(new ClusterId(), new ServerAddress())
+
     def 'should get a connection'() {
         given:
         def connectionPool = Stub(ConnectionPool)
@@ -51,9 +58,10 @@ class DefaultServerSpecification extends Specification {
         def internalConnection = Stub(InternalConnection)
         def connection = Stub(Connection)
 
-        serverMonitorFactory.create(_) >> { serverMonitor }
+        serverMonitorFactory.create(_, _) >> { serverMonitor }
         connectionPool.get() >> { internalConnection }
-        def server = new DefaultServer(new ServerAddress(), mode, connectionPool, connectionFactory, serverMonitorFactory)
+        def server = new DefaultServer(serverId, mode, connectionPool, connectionFactory, serverMonitorFactory,
+                [new NoOpServerListener()], null)
 
         when:
         def receivedConnection = server.getConnection()
@@ -78,9 +86,10 @@ class DefaultServerSpecification extends Specification {
         connectionPool.getAsync(_) >> {
             it[0].onResult(internalConnection, null)
         }
-        serverMonitorFactory.create(_) >> { serverMonitor }
+        serverMonitorFactory.create(_, _) >> { serverMonitor }
 
-        def server = new DefaultServer(new ServerAddress(), mode, connectionPool, connectionFactory, serverMonitorFactory)
+        def server = new DefaultServer(serverId, mode, connectionPool, connectionFactory, serverMonitorFactory,
+                [new NoOpServerListener()], null)
 
         when:
         def latch = new CountDownLatch(1)
@@ -98,25 +107,20 @@ class DefaultServerSpecification extends Specification {
         mode << [SINGLE, MULTIPLE]
     }
 
-    def 'invalidate should invoke change listeners'() {
+    def 'invalidate should invoke server listeners'() {
         given:
-        def connectionFactory = Mock(ConnectionFactory)
-        def server = new DefaultServer(new ServerAddress(), SINGLE, new TestConnectionPool(),
-                                       connectionFactory, new TestServerMonitorFactory())
-        def stateChanged = false;
+        def serverListener = Mock(ServerListener)
 
-        server.addChangeListener(new ChangeListener<ServerDescription>() {
-            @Override
-            void stateChanged(final ChangeEvent<ServerDescription> event) {
-                stateChanged = true;
-            }
-        })
+        def connectionFactory = Mock(ConnectionFactory)
+        def server = new DefaultServer(serverId, SINGLE, new TestConnectionPool(), connectionFactory,
+                new TestServerMonitorFactory(serverId),
+                [serverListener], null)
 
         when:
         server.invalidate();
 
         then:
-        stateChanged
+        1 * serverListener.serverDescriptionChanged(_)
 
         cleanup:
         server?.close()
@@ -131,7 +135,8 @@ class DefaultServerSpecification extends Specification {
         connectionPool.get() >> { throw new MongoSecurityException(createCredential('jeff', 'admin', '123'.toCharArray()), 'Auth failed') }
         serverMonitorFactory.create(_) >> { serverMonitor }
 
-        def server = new DefaultServer(new ServerAddress(), SINGLE, connectionPool, connectionFactory, serverMonitorFactory)
+        def server = new DefaultServer(serverId, SINGLE, connectionPool, connectionFactory, serverMonitorFactory,
+                [new NoOpServerListener()], null)
 
         when:
         server.getConnection()
@@ -150,10 +155,10 @@ class DefaultServerSpecification extends Specification {
         serverMonitorFactory.create(_) >> { serverMonitor }
 
         def exceptionToThrow = new MongoSecurityException(createCredential('jeff', 'admin',
-                                                                           '123'.toCharArray()),
-                                                          'Auth failed')
-        def server = new DefaultServer(new ServerAddress(), SINGLE, new TestConnectionPool(exceptionToThrow), connectionFactory,
-                                       serverMonitorFactory)
+                '123'.toCharArray()),
+                'Auth failed')
+        def server = new DefaultServer(serverId, SINGLE, new TestConnectionPool(exceptionToThrow), connectionFactory,
+                serverMonitorFactory, [new NoOpServerListener()], null)
 
         when:
         def latch = new CountDownLatch(1)
@@ -179,11 +184,12 @@ class DefaultServerSpecification extends Specification {
 
         TestConnectionFactory connectionFactory = new TestConnectionFactory()
 
-        def server = new DefaultServer(new ServerAddress(), SINGLE, connectionPool, connectionFactory, serverMonitorFactory)
+        def server = new DefaultServer(serverId, SINGLE, connectionPool, connectionFactory, serverMonitorFactory,
+                [new NoOpServerListener()], null)
         def testConnection = (TestConnection) server.getConnection()
 
         when:
-        testConnection.enqueueProtocol(new ThrowingProtocol(new MongoNotPrimaryException(new ServerAddress())))
+        testConnection.enqueueProtocol(new TestProtocol(new MongoNotPrimaryException(serverId.address)))
 
         testConnection.insert(new MongoNamespace('test', 'test'), true, ACKNOWLEDGED, asList(new InsertRequest(new BsonDocument())))
 
@@ -195,7 +201,7 @@ class DefaultServerSpecification extends Specification {
         when:
         def futureResultCallback = new FutureResultCallback()
         testConnection.insertAsync(new MongoNamespace('test', 'test'), true, ACKNOWLEDGED, asList(new InsertRequest(new BsonDocument())),
-                                   futureResultCallback);
+                futureResultCallback);
         futureResultCallback.get(60, SECONDS)
 
         then:
@@ -206,7 +212,7 @@ class DefaultServerSpecification extends Specification {
         when:
         futureResultCallback = new FutureResultCallback()
         testConnection.insertAsync(new MongoNamespace('test', 'test'), true, ACKNOWLEDGED, asList(new InsertRequest(new BsonDocument())),
-                                   futureResultCallback);
+                futureResultCallback);
         futureResultCallback.get(60, SECONDS)
 
         then:
@@ -226,11 +232,12 @@ class DefaultServerSpecification extends Specification {
 
         TestConnectionFactory connectionFactory = new TestConnectionFactory()
 
-        def server = new DefaultServer(new ServerAddress(), SINGLE, connectionPool, connectionFactory, serverMonitorFactory)
+        def server = new DefaultServer(serverId, SINGLE, connectionPool, connectionFactory, serverMonitorFactory,
+                [new NoOpServerListener()], null)
         def testConnection = (TestConnection) server.getConnection()
 
         when:
-        testConnection.enqueueProtocol(new ThrowingProtocol(new MongoNodeIsRecoveringException(new ServerAddress())))
+        testConnection.enqueueProtocol(new TestProtocol(new MongoNodeIsRecoveringException(new ServerAddress())))
 
         testConnection.insert(new MongoNamespace('test', 'test'), true, ACKNOWLEDGED, asList(new InsertRequest(new BsonDocument())))
 
@@ -252,11 +259,12 @@ class DefaultServerSpecification extends Specification {
 
         TestConnectionFactory connectionFactory = new TestConnectionFactory()
 
-        def server = new DefaultServer(new ServerAddress(), SINGLE, connectionPool, connectionFactory, serverMonitorFactory)
+        def server = new DefaultServer(serverId, SINGLE, connectionPool, connectionFactory, serverMonitorFactory,
+                [new NoOpServerListener()], null)
         def testConnection = (TestConnection) server.getConnection()
 
         when:
-        testConnection.enqueueProtocol(new ThrowingProtocol(new MongoSocketException('socket error', new ServerAddress())))
+        testConnection.enqueueProtocol(new TestProtocol(new MongoSocketException('socket error', new ServerAddress())))
 
         testConnection.insert(new MongoNamespace('test', 'test'), true, ACKNOWLEDGED, asList(new InsertRequest(new BsonDocument())))
 
@@ -268,7 +276,7 @@ class DefaultServerSpecification extends Specification {
         when:
         def futureResultCallback = new FutureResultCallback<WriteConcernResult>()
         testConnection.insertAsync(new MongoNamespace('test', 'test'), true, ACKNOWLEDGED, asList(new InsertRequest(new BsonDocument())),
-                                   futureResultCallback)
+                futureResultCallback)
         futureResultCallback.get(60, SECONDS)
 
         then:
@@ -284,16 +292,17 @@ class DefaultServerSpecification extends Specification {
         def serverMonitor = Mock(ServerMonitor)
         def internalConnection = Mock(InternalConnection)
         connectionPool.get() >> { internalConnection }
-        serverMonitorFactory.create(_) >> { serverMonitor }
+        serverMonitorFactory.create(_, _) >> { serverMonitor }
 
         TestConnectionFactory connectionFactory = new TestConnectionFactory()
 
-        def server = new DefaultServer(new ServerAddress(), SINGLE, connectionPool, connectionFactory, serverMonitorFactory)
+        def server = new DefaultServer(serverId, SINGLE, connectionPool, connectionFactory, serverMonitorFactory,
+                [new NoOpServerListener()], null)
         def testConnection = (TestConnection) server.getConnection()
 
         when:
-        testConnection.enqueueProtocol(new ThrowingProtocol(new MongoSocketReadTimeoutException('socket timeout', new ServerAddress(),
-                                                                                                new IOException())))
+        testConnection.enqueueProtocol(new TestProtocol(new MongoSocketReadTimeoutException('socket timeout', new ServerAddress(),
+                new IOException())))
 
         testConnection.insert(new MongoNamespace('test', 'test'), true, ACKNOWLEDGED, asList(new InsertRequest(new BsonDocument())))
 
@@ -305,7 +314,7 @@ class DefaultServerSpecification extends Specification {
         when:
         def futureResultCallback = new FutureResultCallback<WriteConcernResult>()
         testConnection.insertAsync(new MongoNamespace('test', 'test'), true, ACKNOWLEDGED, asList(new InsertRequest(new BsonDocument())),
-                                   futureResultCallback)
+                futureResultCallback)
         futureResultCallback.get(60, SECONDS)
 
         then:
@@ -314,21 +323,73 @@ class DefaultServerSpecification extends Specification {
         0 * serverMonitor.invalidate()
     }
 
-    class ThrowingProtocol implements Protocol {
-        private final MongoException mongoException
+    def 'should enable command listener'() {
+        given:
+        def protocol = new TestProtocol()
+        def commandListener = Stub(CommandListener)
+        def connectionPool = Mock(ConnectionPool)
+        def serverMonitorFactory = Stub(ServerMonitorFactory)
+        def serverMonitor = Mock(ServerMonitor)
+        def internalConnection = Mock(InternalConnection)
+        connectionPool.get() >> { internalConnection }
+        serverMonitorFactory.create(_, _) >> { serverMonitor }
 
-        ThrowingProtocol(MongoException mongoException) {
+        TestConnectionFactory connectionFactory = new TestConnectionFactory()
+
+        def server = new DefaultServer(serverId, SINGLE, connectionPool, connectionFactory, serverMonitorFactory,
+                [new NoOpServerListener()], commandListener)
+        def testConnection = (TestConnection) server.getConnection()
+
+        testConnection.enqueueProtocol(protocol)
+
+        when:
+        if (async) {
+            CountDownLatch latch = new CountDownLatch(1)
+            testConnection.commandAsync('admin', new BsonDocument('ping', new BsonInt32(1)), false, new NoOpFieldNameValidator(),
+                    new BsonDocumentCodec()) {
+                BsonDocument result, Throwable t -> latch.countDown()
+            }
+            latch.await()
+
+        } else {
+            testConnection.command('admin', new BsonDocument('ping', new BsonInt32(1)), false, new NoOpFieldNameValidator(),
+                    new BsonDocumentCodec())
+        }
+
+        then:
+        protocol.commandListener == commandListener
+
+        where:
+        async << [false, true]
+    }
+
+    class TestProtocol implements Protocol {
+        private MongoException mongoException
+        private CommandListener commandListener
+
+        TestProtocol() {
+            this(null)
+        }
+
+        TestProtocol(MongoException mongoException) {
             this.mongoException = mongoException
         }
 
         @Override
         Object execute(final InternalConnection connection) {
-            throw mongoException;
+            if (mongoException != null) {
+                throw mongoException;
+            }
         }
 
         @Override
         void executeAsync(final InternalConnection connection, final SingleResultCallback callback) {
             callback.onResult(null, mongoException);
+        }
+
+        @Override
+        void setCommandListener(final CommandListener commandListener) {
+            this.commandListener = commandListener
         }
     }
 }

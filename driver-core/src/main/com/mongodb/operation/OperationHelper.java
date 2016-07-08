@@ -16,9 +16,11 @@
 
 package com.mongodb.operation;
 
-import com.mongodb.Function;
+import com.mongodb.MongoClientException;
 import com.mongodb.MongoNamespace;
+import com.mongodb.ReadConcern;
 import com.mongodb.ServerAddress;
+import com.mongodb.WriteConcern;
 import com.mongodb.async.AsyncBatchCursor;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.binding.AsyncConnectionSource;
@@ -26,22 +28,30 @@ import com.mongodb.binding.AsyncReadBinding;
 import com.mongodb.binding.AsyncWriteBinding;
 import com.mongodb.binding.ConnectionSource;
 import com.mongodb.binding.ReadBinding;
+import com.mongodb.binding.ReferenceCounted;
 import com.mongodb.binding.WriteBinding;
 import com.mongodb.connection.AsyncConnection;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.ConnectionDescription;
 import com.mongodb.connection.QueryResult;
 import com.mongodb.connection.ServerVersion;
+import com.mongodb.diagnostics.logging.Logger;
+import com.mongodb.diagnostics.logging.Loggers;
 import org.bson.BsonDocument;
 import org.bson.BsonInt64;
 import org.bson.codecs.Decoder;
 
 import java.util.Collections;
+import java.util.List;
 
+import static com.mongodb.assertions.Assertions.notNull;
 import static com.mongodb.internal.async.ErrorHandlingResultCallback.errorHandlingCallback;
+import static java.lang.String.format;
 import static java.util.Arrays.asList;
+import static java.util.Collections.singletonList;
 
 final class OperationHelper {
+    public static final Logger LOGGER = Loggers.getLogger("operation");
 
     interface CallableWithConnection<T> {
         T call(Connection connection);
@@ -59,18 +69,38 @@ final class OperationHelper {
         void call(AsyncConnectionSource source, AsyncConnection connection, Throwable t);
     }
 
-    static class IdentityTransformer<T> implements Function<T, T> {
-        @Override
-        public T apply(final T t) {
-            return t;
+    static void checkValidReadConcern(final Connection connection, final ReadConcern readConcern) {
+        if (!serverIsAtLeastVersionThreeDotTwo(connection.getDescription()) && !readConcern.isServerDefault()) {
+            throw new IllegalArgumentException(format("Unsupported ReadConcern : '%s'", readConcern.asDocument().toJson()));
         }
     }
 
-    static class VoidTransformer<T> implements Function<T, Void> {
-        @Override
-        public Void apply(final T t) {
-            return null;
+    static void checkValidReadConcern(final AsyncConnection connection, final ReadConcern readConcern,
+                                      final AsyncCallableWithConnection callable) {
+        Throwable throwable = null;
+        if (!serverIsAtLeastVersionThreeDotTwo(connection.getDescription()) && !readConcern.isServerDefault()) {
+            throwable = new IllegalArgumentException(format("Unsupported ReadConcern : '%s'", readConcern.asDocument().toJson()));
         }
+        callable.call(connection, throwable);
+    }
+
+    static void checkValidReadConcern(final AsyncConnectionSource source, final AsyncConnection connection, final ReadConcern readConcern,
+                                      final AsyncCallableWithConnectionAndSource callable) {
+        Throwable throwable = null;
+        if (!serverIsAtLeastVersionThreeDotTwo(connection.getDescription()) && !readConcern.isServerDefault()) {
+            throwable = new IllegalArgumentException(format("Unsupported ReadConcern : '%s'", readConcern.asDocument().toJson()));
+        }
+        callable.call(source, connection, throwable);
+    }
+
+    static boolean bypassDocumentValidationNotSupported(final Boolean bypassDocumentValidation, final WriteConcern writeConcern,
+                                                        final ConnectionDescription description) {
+        return bypassDocumentValidation != null && serverIsAtLeastVersionThreeDotTwo(description) && !writeConcern.isAcknowledged();
+    }
+
+    static MongoClientException getBypassDocumentValidationException() {
+        return new MongoClientException("Specifying bypassDocumentValidation with an unacknowledged WriteConcern "
+                                        + "is not supported");
     }
 
     static <T> QueryBatchCursor<T> createEmptyBatchCursor(final MongoNamespace namespace, final Decoder<T> decoder,
@@ -94,48 +124,60 @@ final class OperationHelper {
     }
 
     static <T> AsyncBatchCursor<T> cursorDocumentToAsyncBatchCursor(final BsonDocument cursorDocument, final Decoder<T> decoder,
-                                                                    final AsyncConnectionSource source, final int batchSize) {
+                                                                    final AsyncConnectionSource source, final AsyncConnection connection,
+                                                                    final int batchSize) {
         return new AsyncQueryBatchCursor<T>(OperationHelper.<T>cursorDocumentToQueryResult(cursorDocument,
                                                                                            source.getServerDescription().getAddress()),
-                                            0, batchSize, decoder, source);
+                                            0, batchSize, 0, decoder, source, connection);
     }
 
 
     static <T> QueryResult<T> cursorDocumentToQueryResult(final BsonDocument cursorDocument, final ServerAddress serverAddress) {
+        return cursorDocumentToQueryResult(cursorDocument, serverAddress, "firstBatch");
+    }
+
+    static <T> QueryResult<T> getMoreCursorDocumentToQueryResult(final BsonDocument cursorDocument, final ServerAddress serverAddress) {
+        return cursorDocumentToQueryResult(cursorDocument, serverAddress, "nextBatch");
+    }
+
+    private static <T> QueryResult<T> cursorDocumentToQueryResult(final BsonDocument cursorDocument, final ServerAddress serverAddress,
+                                                          final String fieldNameContainingBatch) {
         long cursorId = ((BsonInt64) cursorDocument.get("id")).getValue();
         MongoNamespace queryResultNamespace = new MongoNamespace(cursorDocument.getString("ns").getValue());
-        return new QueryResult<T>(queryResultNamespace, BsonDocumentWrapperHelper.<T>toList(cursorDocument, "firstBatch"), cursorId,
-                serverAddress);
+        return new QueryResult<T>(queryResultNamespace, BsonDocumentWrapperHelper.<T>toList(cursorDocument, fieldNameContainingBatch),
+                                  cursorId, serverAddress);
     }
 
     static <T> SingleResultCallback<T> releasingCallback(final SingleResultCallback<T> wrapped, final AsyncConnection connection) {
-        return new ConnectionReleasingWrappedCallback<T>(wrapped, null, connection);
+        return new ReferenceCountedReleasingWrappedCallback<T>(wrapped, singletonList(connection));
     }
 
     static <T> SingleResultCallback<T> releasingCallback(final SingleResultCallback<T> wrapped, final AsyncConnectionSource source,
                                                          final AsyncConnection connection) {
-        return new ConnectionReleasingWrappedCallback<T>(wrapped, source, connection);
+        return new ReferenceCountedReleasingWrappedCallback<T>(wrapped, asList(connection, source));
     }
 
-    private static class ConnectionReleasingWrappedCallback<T> implements SingleResultCallback<T> {
-        private final SingleResultCallback<T> wrapped;
-        private final AsyncConnectionSource source;
-        private final AsyncConnection connection;
+    static <T> SingleResultCallback<T> releasingCallback(final SingleResultCallback<T> wrapped,
+                                                         final AsyncReadBinding readBinding,
+                                                         final AsyncConnectionSource source,
+                                                         final AsyncConnection connection) {
+        return new ReferenceCountedReleasingWrappedCallback<T>(wrapped, asList(readBinding, connection, source));
+    }
 
-        ConnectionReleasingWrappedCallback(final SingleResultCallback<T> wrapped, final AsyncConnectionSource source,
-                                           final AsyncConnection connection) {
+    private static class ReferenceCountedReleasingWrappedCallback<T> implements SingleResultCallback<T> {
+        private final SingleResultCallback<T> wrapped;
+        private final List<? extends ReferenceCounted> referenceCounted;
+
+        ReferenceCountedReleasingWrappedCallback(final SingleResultCallback<T> wrapped,
+                                                 final List<? extends ReferenceCounted> referenceCounted) {
             this.wrapped = wrapped;
-            this.source = source;
-            this.connection = connection;
+            this.referenceCounted = notNull("referenceCounted", referenceCounted);
         }
 
         @Override
         public void onResult(final T result, final Throwable t) {
-            if (connection != null) {
-                connection.release();
-            }
-            if (source != null) {
-                source.release();
+            for (ReferenceCounted cur : referenceCounted) {
+                cur.release();
             }
             wrapped.onResult(result, t);
         }
@@ -147,6 +189,10 @@ final class OperationHelper {
 
     static boolean serverIsAtLeastVersionThreeDotZero(final ConnectionDescription description) {
         return serverIsAtLeastVersion(description, new ServerVersion(asList(3, 0, 0)));
+    }
+
+    static boolean serverIsAtLeastVersionThreeDotTwo(final ConnectionDescription description) {
+        return serverIsAtLeastVersion(description, new ServerVersion(asList(3, 1, 9)));
     }
 
     static boolean serverIsAtLeastVersion(final ConnectionDescription description, final ServerVersion serverVersion) {
@@ -199,15 +245,15 @@ final class OperationHelper {
     }
 
     static void withConnection(final AsyncWriteBinding binding, final AsyncCallableWithConnection callable) {
-        binding.getWriteConnectionSource(errorHandlingCallback(new AsyncCallableWithConnectionCallback(callable)));
+        binding.getWriteConnectionSource(errorHandlingCallback(new AsyncCallableWithConnectionCallback(callable), LOGGER));
     }
 
     static void withConnection(final AsyncReadBinding binding, final AsyncCallableWithConnection callable) {
-        binding.getReadConnectionSource(errorHandlingCallback(new AsyncCallableWithConnectionCallback(callable)));
+        binding.getReadConnectionSource(errorHandlingCallback(new AsyncCallableWithConnectionCallback(callable), LOGGER));
     }
 
     static void withConnection(final AsyncReadBinding binding, final AsyncCallableWithConnectionAndSource callable) {
-        binding.getReadConnectionSource(errorHandlingCallback(new AsyncCallableWithConnectionAndSourceCallback(callable)));
+        binding.getReadConnectionSource(errorHandlingCallback(new AsyncCallableWithConnectionAndSourceCallback(callable), LOGGER));
     }
 
     private static class AsyncCallableWithConnectionCallback implements SingleResultCallback<AsyncConnectionSource> {
@@ -225,7 +271,7 @@ final class OperationHelper {
         }
     }
 
-    private static <T> void withConnectionSource(final AsyncConnectionSource source, final AsyncCallableWithConnection callable) {
+    private static void withConnectionSource(final AsyncConnectionSource source, final AsyncCallableWithConnection callable) {
         source.getConnection(new SingleResultCallback<AsyncConnection>() {
             @Override
             public void onResult(final AsyncConnection connection, final Throwable t) {
@@ -239,7 +285,7 @@ final class OperationHelper {
         });
     }
 
-    private static <T> void withConnectionSource(final AsyncConnectionSource source, final AsyncCallableWithConnectionAndSource callable) {
+    private static void withConnectionSource(final AsyncConnectionSource source, final AsyncCallableWithConnectionAndSource callable) {
         source.getConnection(new SingleResultCallback<AsyncConnection>() {
             @Override
             public void onResult(final AsyncConnection result, final Throwable t) {

@@ -21,6 +21,8 @@ import com.mongodb.MongoClientURI;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.CreateCollectionOptions;
+import com.mongodb.client.model.Indexes;
+import com.mongodb.client.model.TextSearchOptions;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 
@@ -75,7 +77,7 @@ public class QuickTourAdmin {
         collection.drop();
 
         // create an ascending index on the "i" field
-        collection.createIndex(new Document("i", 1));
+        collection.createIndex(Indexes.ascending("i"));
 
         // list the indexes on the collection
         for (final Document index : collection.listIndexes()) {
@@ -83,7 +85,7 @@ public class QuickTourAdmin {
         }
 
         // create a text index on the "content" field
-        collection.createIndex(new Document("content", "text"));
+        collection.createIndex(Indexes.text("content"));
 
         collection.insertOne(new Document("_id", 0).append("content", "textual content"));
         collection.insertOne(new Document("_id", 1).append("content", "additional content"));
@@ -94,7 +96,7 @@ public class QuickTourAdmin {
         System.out.println("Text search matches: " + matchCount);
 
         // Find using the $language operator
-        Bson textSearch = text("textual content -irrelevant", "english");
+        Bson textSearch = text("textual content -irrelevant", new TextSearchOptions().language("english"));
         matchCount = collection.count(textSearch);
         System.out.println("Text search matches (english): " + matchCount);
 

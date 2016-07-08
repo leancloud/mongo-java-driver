@@ -1,5 +1,5 @@
 /*
- * Copyright 2008-2015 MongoDB, Inc.
+ * Copyright 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,6 +41,7 @@ import static com.mongodb.connection.ServerDescription.getDefaultMaxDocumentSize
 import static com.mongodb.connection.ServerDescription.getDefaultMaxWireVersion;
 import static com.mongodb.connection.ServerDescription.getDefaultMinWireVersion;
 import static com.mongodb.connection.ServerType.REPLICA_SET_ARBITER;
+import static com.mongodb.connection.ServerType.REPLICA_SET_OTHER;
 import static com.mongodb.connection.ServerType.REPLICA_SET_PRIMARY;
 import static com.mongodb.connection.ServerType.REPLICA_SET_SECONDARY;
 import static com.mongodb.connection.ServerType.SHARD_ROUTER;
@@ -80,12 +81,17 @@ final class DescriptionHelper {
                                 .maxWireVersion(isMasterResult.getInt32("maxWireVersion",
                                                                         new BsonInt32(getDefaultMaxWireVersion())).getValue())
                                 .electionId(getElectionId(isMasterResult))
+                                .setVersion(getSetVersion(isMasterResult))
                                 .roundTripTime(roundTripTime, NANOSECONDS)
                                 .ok(CommandHelper.isCommandOk(isMasterResult)).build();
     }
 
     private static ObjectId getElectionId(final BsonDocument isMasterResult) {
         return isMasterResult.containsKey("electionId") ? isMasterResult.getObjectId("electionId").getValue() : null;
+    }
+
+    private static Integer getSetVersion(final BsonDocument isMasterResult) {
+        return isMasterResult.containsKey("setVersion") ? isMasterResult.getNumber("setVersion").intValue() : null;
     }
 
     private static int getMaxMessageSizeBytes(final BsonDocument isMasterResult) {
@@ -136,6 +142,11 @@ final class DescriptionHelper {
         }
 
         if (isReplicaSetMember(isMasterResult)) {
+
+            if (isMasterResult.getBoolean("hidden", BsonBoolean.FALSE).getValue()) {
+                return REPLICA_SET_OTHER;
+            }
+
             if (isMasterResult.getBoolean("ismaster", BsonBoolean.FALSE).getValue()) {
                 return REPLICA_SET_PRIMARY;
             }

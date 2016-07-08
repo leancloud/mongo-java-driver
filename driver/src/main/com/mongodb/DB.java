@@ -17,6 +17,8 @@
 package com.mongodb;
 
 import com.mongodb.annotations.ThreadSafe;
+import com.mongodb.client.model.ValidationAction;
+import com.mongodb.client.model.ValidationLevel;
 import com.mongodb.connection.BufferProvider;
 import com.mongodb.operation.CommandReadOperation;
 import com.mongodb.operation.CommandWriteOperation;
@@ -55,6 +57,8 @@ import static java.util.Arrays.asList;
  * }
  * </pre>
  *
+ * See {@link Mongo#getDB(String)} for further information about the effective deprecation of this class.
+ *
  * @mongodb.driver.manual reference/glossary/#term-database Database
  * @see MongoClient
  */
@@ -68,6 +72,7 @@ public class DB {
     private final Codec<DBObject> commandCodec;
     private volatile ReadPreference readPreference;
     private volatile WriteConcern writeConcern;
+    private volatile ReadConcern readConcern;
 
     DB(final Mongo mongo, final String name, final OperationExecutor executor) {
         if (!isValidName(name)) {
@@ -140,6 +145,30 @@ public class DB {
      */
     public WriteConcern getWriteConcern() {
         return writeConcern != null ? writeConcern : mongo.getWriteConcern();
+    }
+
+    /**
+     * Sets the read concern for this database.
+     *
+     * @param readConcern the read concern to use for this collection
+     * @since 3.3
+     * @mongodb.server.release 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    public void setReadConcern(final ReadConcern readConcern) {
+        this.readConcern = readConcern;
+    }
+
+    /**
+     * Get the read concern for this database.
+     *
+     * @return the {@link com.mongodb.ReadConcern}
+     * @since 3.3
+     * @mongodb.server.release 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    public ReadConcern getReadConcern() {
+        return readConcern != null ? readConcern : mongo.getReadConcern();
     }
 
     /**
@@ -249,7 +278,9 @@ public class DB {
      * @mongodb.driver.manual reference/method/db.createCollection/ createCollection()
      */
     public DBCollection createCollection(final String collectionName, final DBObject options) {
-        executor.execute(getCreateCollectionOperation(collectionName, options));
+        if (options != null) {
+            executor.execute(getCreateCollectionOperation(collectionName, options));
+        }
         return getCollection(collectionName);
     }
 
@@ -263,11 +294,23 @@ public class DB {
         if (options.get("capped") != null && !(options.get("capped") instanceof Boolean)) {
             throw new IllegalArgumentException("'capped' should be Boolean");
         }
-        if (options.get("autoIndexId") != null && !(options.get("capped") instanceof Boolean)) {
-            throw new IllegalArgumentException("'capped' should be Boolean");
+        if (options.get("autoIndexId") != null && !(options.get("autoIndexId") instanceof Boolean)) {
+            throw new IllegalArgumentException("'autoIndexId' should be Boolean");
         }
         if (options.get("storageEngine") != null && !(options.get("storageEngine") instanceof DBObject)) {
-            throw new IllegalArgumentException("storageEngine' should be DBObject");
+            throw new IllegalArgumentException("'storageEngine' should be DBObject");
+        }
+        if (options.get("indexOptionDefaults") != null && !(options.get("indexOptionDefaults") instanceof DBObject)) {
+            throw new IllegalArgumentException("'indexOptionDefaults' should be DBObject");
+        }
+        if (options.get("validator") != null && !(options.get("validator") instanceof DBObject)) {
+            throw new IllegalArgumentException("'validator' should be DBObject");
+        }
+        if (options.get("validationLevel") != null && !(options.get("validationLevel") instanceof String)) {
+            throw new IllegalArgumentException("'validationLevel' should be String");
+        }
+        if (options.get("validationAction") != null && !(options.get("validationAction") instanceof String)) {
+            throw new IllegalArgumentException("'validationAction' should be String");
         }
 
         boolean capped = false;
@@ -276,6 +319,11 @@ public class DB {
         long maxDocuments = 0;
         Boolean usePowerOfTwoSizes = null;
         BsonDocument storageEngineOptions = null;
+        BsonDocument indexOptionDefaults = null;
+        BsonDocument validator = null;
+        ValidationLevel validationLevel = null;
+        ValidationAction validationAction = null;
+
         if (options.get("capped") != null) {
             capped = (Boolean) options.get("capped");
         }
@@ -294,6 +342,18 @@ public class DB {
         if (options.get("storageEngine") != null) {
             storageEngineOptions = wrap((DBObject) options.get("storageEngine"));
         }
+        if (options.get("indexOptionDefaults") != null) {
+            indexOptionDefaults = wrap((DBObject) options.get("indexOptionDefaults"));
+        }
+        if (options.get("validator") != null) {
+            validator = wrap((DBObject) options.get("validator"));
+        }
+        if (options.get("validationLevel") != null) {
+            validationLevel = ValidationLevel.fromString((String) options.get("validationLevel"));
+        }
+        if (options.get("validationAction") != null) {
+            validationAction = ValidationAction.fromString((String) options.get("validationAction"));
+        }
 
         return new CreateCollectionOperation(getName(), collectionName)
                    .capped(capped)
@@ -301,7 +361,11 @@ public class DB {
                    .autoIndex(autoIndex)
                    .maxDocuments(maxDocuments)
                    .usePowerOf2Sizes(usePowerOfTwoSizes)
-                   .storageEngineOptions(storageEngineOptions);
+                   .storageEngineOptions(storageEngineOptions)
+                   .indexOptionDefaults(indexOptionDefaults)
+                   .validator(validator)
+                   .validationLevel(validationLevel)
+                   .validationAction(validationAction);
     }
 
     /**

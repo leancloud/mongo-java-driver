@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,10 @@
 
 package com.mongodb.operation;
 
-import com.mongodb.Function;
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoNamespace;
 import com.mongodb.ReadPreference;
+import com.mongodb.ServerAddress;
 import com.mongodb.async.AsyncBatchCursor;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.binding.AsyncConnectionSource;
@@ -30,6 +30,7 @@ import com.mongodb.connection.AsyncConnection;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.ConnectionDescription;
 import com.mongodb.connection.QueryResult;
+import com.mongodb.operation.CommandOperationHelper.CommandTransformer;
 import org.bson.BsonDocument;
 import org.bson.BsonInt64;
 import org.bson.BsonString;
@@ -48,6 +49,7 @@ import static com.mongodb.operation.CommandOperationHelper.isNamespaceError;
 import static com.mongodb.operation.CommandOperationHelper.rethrowIfNotNamespaceError;
 import static com.mongodb.operation.CursorHelper.getCursorDocumentFromBatchSize;
 import static com.mongodb.operation.OperationHelper.AsyncCallableWithConnectionAndSource;
+import static com.mongodb.operation.OperationHelper.LOGGER;
 import static com.mongodb.operation.OperationHelper.createEmptyAsyncBatchCursor;
 import static com.mongodb.operation.OperationHelper.createEmptyBatchCursor;
 import static com.mongodb.operation.OperationHelper.cursorDocumentToAsyncBatchCursor;
@@ -138,15 +140,15 @@ public class ListIndexesOperation<T> implements AsyncReadOperation<AsyncBatchCur
             public BatchCursor<T> call(final ConnectionSource source, final Connection connection) {
                 if (serverIsAtLeastVersionThreeDotZero(connection.getDescription())) {
                     try {
-                        return executeWrappedCommandProtocol(namespace.getDatabaseName(), getCommand(), createCommandDecoder(), connection,
-                                                             transformer(source));
+                        return executeWrappedCommandProtocol(binding, namespace.getDatabaseName(), getCommand(), createCommandDecoder(),
+                                connection, transformer(source));
                     } catch (MongoCommandException e) {
                         return rethrowIfNotNamespaceError(e, createEmptyBatchCursor(namespace, decoder,
                                                                                     source.getServerDescription().getAddress(), batchSize));
                     }
                 } else {
                     return new QueryBatchCursor<T>(connection.query(getIndexNamespace(),
-                            asQueryDocument(connection.getDescription(), binding.getReadPreference()), null, batchSize, 0,
+                            asQueryDocument(connection.getDescription(), binding.getReadPreference()), null, 0, 0, batchSize,
                             binding.getReadPreference().isSlaveOk(), false, false, false, false, false, decoder), 0, batchSize, decoder,
                             source);
                 }
@@ -159,30 +161,31 @@ public class ListIndexesOperation<T> implements AsyncReadOperation<AsyncBatchCur
         withConnection(binding, new AsyncCallableWithConnectionAndSource() {
             @Override
             public void call(final AsyncConnectionSource source, final AsyncConnection connection, final Throwable t) {
+                SingleResultCallback<AsyncBatchCursor<T>> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 if (t != null) {
-                    errorHandlingCallback(callback).onResult(null, t);
+                    errHandlingCallback.onResult(null, t);
                 } else {
-                    final SingleResultCallback<AsyncBatchCursor<T>> wrappedCallback = releasingCallback(errorHandlingCallback(callback),
+                    final SingleResultCallback<AsyncBatchCursor<T>> wrappedCallback = releasingCallback(errHandlingCallback,
                                                                                                         source, connection);
                     if (serverIsAtLeastVersionThreeDotZero(connection.getDescription())) {
-                        executeWrappedCommandProtocolAsync(namespace.getDatabaseName(), getCommand(), createCommandDecoder(),
-                                                           connection, binding.getReadPreference(), asyncTransformer(source),
-                                                           new SingleResultCallback<AsyncBatchCursor<T>>() {
-                                                               @Override
-                                                               public void onResult(final AsyncBatchCursor<T> result,
-                                                                                    final Throwable t) {
-                                                                   if (t != null && !isNamespaceError(t)) {
-                                                                       wrappedCallback.onResult(null, t);
-                                                                   } else {
-                                                                       wrappedCallback.onResult(result != null
-                                                                                                ? result : emptyAsyncCursor(source),
-                                                                                                null);
-                                                                   }
-                                                               }
-                                                           });
+                        executeWrappedCommandProtocolAsync(binding, namespace.getDatabaseName(), getCommand(), createCommandDecoder(),
+                                connection, asyncTransformer(source, connection),
+                                new SingleResultCallback<AsyncBatchCursor<T>>() {
+                                    @Override
+                                    public void onResult(final AsyncBatchCursor<T> result,
+                                                         final Throwable t) {
+                                        if (t != null && !isNamespaceError(t)) {
+                                            wrappedCallback.onResult(null, t);
+                                        } else {
+                                            wrappedCallback.onResult(result != null
+                                                                     ? result : emptyAsyncCursor(source),
+                                                                     null);
+                                        }
+                                    }
+                                });
                     } else {
                         connection.queryAsync(getIndexNamespace(),
-                                asQueryDocument(connection.getDescription(), binding.getReadPreference()), null, batchSize, 0,
+                                asQueryDocument(connection.getDescription(), binding.getReadPreference()), null, 0, 0, batchSize,
                                 binding.getReadPreference().isSlaveOk(), false, false, false, false, false, decoder,
                                 new SingleResultCallback<QueryResult<T>>() {
                                     @Override
@@ -190,7 +193,8 @@ public class ListIndexesOperation<T> implements AsyncReadOperation<AsyncBatchCur
                                         if (t != null) {
                                             wrappedCallback.onResult(null, t);
                                         } else {
-                                            wrappedCallback.onResult(new AsyncQueryBatchCursor<T>(result, 0, batchSize, decoder, source),
+                                            wrappedCallback.onResult(new AsyncQueryBatchCursor<T>(result, 0, batchSize, 0, decoder, source,
+                                                                                                  connection),
                                                     null);
                                         }
                                     }
@@ -229,20 +233,21 @@ public class ListIndexesOperation<T> implements AsyncReadOperation<AsyncBatchCur
         return command;
     }
 
-    private Function<BsonDocument, BatchCursor<T>> transformer(final ConnectionSource source) {
-        return new Function<BsonDocument, BatchCursor<T>>() {
+    private CommandTransformer<BsonDocument, BatchCursor<T>> transformer(final ConnectionSource source) {
+        return new CommandTransformer<BsonDocument, BatchCursor<T>>() {
             @Override
-            public BatchCursor<T> apply(final BsonDocument result) {
+            public BatchCursor<T> apply(final BsonDocument result, final ServerAddress serverAddress) {
                 return cursorDocumentToBatchCursor(result.getDocument("cursor"), decoder, source, batchSize);
             }
         };
     }
 
-    private Function<BsonDocument, AsyncBatchCursor<T>> asyncTransformer(final AsyncConnectionSource source) {
-        return new Function<BsonDocument, AsyncBatchCursor<T>>() {
+    private CommandTransformer<BsonDocument, AsyncBatchCursor<T>> asyncTransformer(final AsyncConnectionSource source,
+                                                                         final AsyncConnection connection) {
+        return new CommandTransformer<BsonDocument, AsyncBatchCursor<T>>() {
             @Override
-            public AsyncBatchCursor<T> apply(final BsonDocument result) {
-                return cursorDocumentToAsyncBatchCursor(result.getDocument("cursor"), decoder, source, batchSize);
+            public AsyncBatchCursor<T> apply(final BsonDocument result, final ServerAddress serverAddress) {
+                return cursorDocumentToAsyncBatchCursor(result.getDocument("cursor"), decoder, source, connection, batchSize);
             }
         };
     }

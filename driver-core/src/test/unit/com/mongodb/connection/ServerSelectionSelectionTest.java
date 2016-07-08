@@ -16,22 +16,22 @@
 
 package com.mongodb.connection;
 
-import com.mongodb.JsonPoweredTestHelper;
 import com.mongodb.ReadPreference;
 import com.mongodb.ServerAddress;
 import com.mongodb.Tag;
 import com.mongodb.TagSet;
 import com.mongodb.selector.CompositeServerSelector;
 import com.mongodb.selector.LatencyMinimizingServerSelector;
-import com.mongodb.selector.PrimaryServerSelector;
 import com.mongodb.selector.ReadPreferenceServerSelector;
 import com.mongodb.selector.ServerSelector;
+import com.mongodb.selector.WritableServerSelector;
 import org.bson.BsonArray;
 import org.bson.BsonDocument;
 import org.bson.BsonValue;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
+import util.JsonPoweredTestHelper;
 
 import java.io.File;
 import java.io.IOException;
@@ -166,7 +166,7 @@ public class ServerSelectionSelectionTest {
 
     private ServerSelector getServerSelector() {
         if (definition.getString("operation").getValue().equals("write")) {
-            return new PrimaryServerSelector();
+            return new WritableServerSelector();
         } else {
             BsonDocument readPreferenceDefinition = definition.getDocument("read_preference");
             ReadPreference readPreference;

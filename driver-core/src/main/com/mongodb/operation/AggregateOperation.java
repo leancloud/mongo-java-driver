@@ -17,8 +17,9 @@
 package com.mongodb.operation;
 
 import com.mongodb.ExplainVerbosity;
-import com.mongodb.Function;
 import com.mongodb.MongoNamespace;
+import com.mongodb.ReadConcern;
+import com.mongodb.ServerAddress;
 import com.mongodb.async.AsyncBatchCursor;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.binding.AsyncConnectionSource;
@@ -29,6 +30,7 @@ import com.mongodb.connection.AsyncConnection;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.ConnectionDescription;
 import com.mongodb.connection.QueryResult;
+import com.mongodb.operation.CommandOperationHelper.CommandTransformer;
 import org.bson.BsonArray;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
@@ -46,6 +48,8 @@ import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommand
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocolAsync;
 import static com.mongodb.operation.OperationHelper.AsyncCallableWithConnectionAndSource;
 import static com.mongodb.operation.OperationHelper.CallableWithConnectionAndSource;
+import static com.mongodb.operation.OperationHelper.LOGGER;
+import static com.mongodb.operation.OperationHelper.checkValidReadConcern;
 import static com.mongodb.operation.OperationHelper.cursorDocumentToQueryResult;
 import static com.mongodb.operation.OperationHelper.releasingCallback;
 import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionTwoDotSix;
@@ -70,6 +74,7 @@ public class AggregateOperation<T> implements AsyncReadOperation<AsyncBatchCurso
     private Integer batchSize;
     private long maxTimeMS;
     private Boolean useCursor;
+    private ReadConcern readConcern = ReadConcern.DEFAULT;
 
     /**
      * Construct a new instance.
@@ -191,16 +196,38 @@ public class AggregateOperation<T> implements AsyncReadOperation<AsyncBatchCurso
         return this;
     }
 
+    /**
+     * Gets the read concern
+     *
+     * @return the read concern
+     * @since 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    public ReadConcern getReadConcern() {
+        return readConcern;
+    }
+
+    /**
+     * Sets the read concern
+     * @param readConcern the read concern
+     * @return this
+     * @since 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    public AggregateOperation<T> readConcern(final ReadConcern readConcern) {
+        this.readConcern = notNull("readConcern", readConcern);
+        return this;
+    }
+
     @Override
     public BatchCursor<T> execute(final ReadBinding binding) {
         return withConnection(binding, new CallableWithConnectionAndSource<BatchCursor<T>>() {
             @Override
             public BatchCursor<T> call(final ConnectionSource source, final Connection connection) {
-                return executeWrappedCommandProtocol(namespace.getDatabaseName(), asCommandDocument(connection.getDescription()),
-                                                     CommandResultDocumentCodec.create(decoder,
-                                                                                       getFieldNameWithResults(connection
-                                                                                                               .getDescription())),
-                                                     connection, binding.getReadPreference(), transformer(source, connection));
+                checkValidReadConcern(connection, readConcern);
+                return executeWrappedCommandProtocol(binding, namespace.getDatabaseName(), asCommandDocument(connection.getDescription()),
+                        CommandResultDocumentCodec.create(decoder, getFieldNameWithResults(connection.getDescription())),
+                        connection, transformer(source, connection));
             }
         });
     }
@@ -210,15 +237,25 @@ public class AggregateOperation<T> implements AsyncReadOperation<AsyncBatchCurso
         withConnection(binding, new AsyncCallableWithConnectionAndSource() {
             @Override
             public void call(final AsyncConnectionSource source, final AsyncConnection connection, final Throwable t) {
+                SingleResultCallback<AsyncBatchCursor<T>> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 if (t != null) {
-                    errorHandlingCallback(callback).onResult(null, t);
+                    errHandlingCallback.onResult(null, t);
                 } else {
-                    executeWrappedCommandProtocolAsync(namespace.getDatabaseName(), asCommandDocument(connection.getDescription()),
-                                                       CommandResultDocumentCodec.create(decoder,
-                                                                                         getFieldNameWithResults(connection
-                                                                                                                 .getDescription())),
-                                                       connection, binding.getReadPreference(), asyncTransformer(source, connection),
-                                                       releasingCallback(errorHandlingCallback(callback), source, connection));
+                    final SingleResultCallback<AsyncBatchCursor<T>> wrappedCallback = releasingCallback(errHandlingCallback, source,
+                            connection);
+                    checkValidReadConcern(source, connection, readConcern, new AsyncCallableWithConnectionAndSource() {
+                        @Override
+                        public void call(final AsyncConnectionSource source, final AsyncConnection connection, final Throwable t) {
+                            if (t != null) {
+                                wrappedCallback.onResult(null, t);
+                            } else {
+                                executeWrappedCommandProtocolAsync(binding, namespace.getDatabaseName(),
+                                        asCommandDocument(connection.getDescription()),
+                                        CommandResultDocumentCodec.create(decoder, getFieldNameWithResults(connection.getDescription())),
+                                        connection, asyncTransformer(source, connection), wrappedCallback);
+                            }
+                        }
+                    });
                 }
             }
         });
@@ -268,6 +305,10 @@ public class AggregateOperation<T> implements AsyncReadOperation<AsyncBatchCurso
         if (allowDiskUse != null) {
             commandDocument.put("allowDiskUse", BsonBoolean.valueOf(allowDiskUse));
         }
+        if (!readConcern.isServerDefault()) {
+            commandDocument.put("readConcern", readConcern.asDocument());
+        }
+
         return commandDocument;
     }
 
@@ -285,23 +326,23 @@ public class AggregateOperation<T> implements AsyncReadOperation<AsyncBatchCurso
         }
     }
 
-    private Function<BsonDocument, BatchCursor<T>> transformer(final ConnectionSource source, final Connection connection) {
-        return new Function<BsonDocument, BatchCursor<T>>() {
+    private CommandTransformer<BsonDocument, BatchCursor<T>> transformer(final ConnectionSource source, final Connection connection) {
+        return new CommandTransformer<BsonDocument, BatchCursor<T>>() {
             @Override
-            public BatchCursor<T> apply(final BsonDocument result) {
+            public BatchCursor<T> apply(final BsonDocument result, final ServerAddress serverAddress) {
                 QueryResult<T> queryResult = createQueryResult(result, connection.getDescription());
                 return new QueryBatchCursor<T>(queryResult, 0, batchSize != null ? batchSize : 0, decoder, source);
             }
         };
     }
 
-    private Function<BsonDocument, AsyncBatchCursor<T>> asyncTransformer(final AsyncConnectionSource source,
+    private CommandTransformer<BsonDocument, AsyncBatchCursor<T>> asyncTransformer(final AsyncConnectionSource source,
                                                                          final AsyncConnection connection) {
-        return new Function<BsonDocument, AsyncBatchCursor<T>>() {
+        return new CommandTransformer<BsonDocument, AsyncBatchCursor<T>>() {
             @Override
-            public AsyncBatchCursor<T> apply(final BsonDocument result) {
+            public AsyncBatchCursor<T> apply(final BsonDocument result, final ServerAddress serverAddress) {
                 QueryResult<T> queryResult = createQueryResult(result, connection.getDescription());
-                return new AsyncQueryBatchCursor<T>(queryResult, 0, batchSize != null ? batchSize : 0, decoder, source);
+                return new AsyncQueryBatchCursor<T>(queryResult, 0, batchSize != null ? batchSize : 0, 0, decoder, source, connection);
             }
         };
     }

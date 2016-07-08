@@ -23,12 +23,17 @@ import org.bson.BsonBinarySubType
 import org.bson.BsonDocument
 import org.bson.BsonDocumentReader
 import org.bson.BsonDocumentWriter
+import org.bson.BsonSymbol
+import org.bson.codecs.BsonValueCodecProvider
 import org.bson.codecs.DecoderContext
 import org.bson.codecs.EncoderContext
 import org.bson.codecs.UuidCodec
 import org.bson.codecs.ValueCodecProvider
 import org.bson.types.Binary
+import org.bson.types.Symbol
 import spock.lang.Specification
+
+import java.sql.Timestamp
 
 import static org.bson.UuidRepresentation.STANDARD
 import static org.bson.codecs.configuration.CodecRegistries.fromCodecs
@@ -38,7 +43,7 @@ import static org.bson.codecs.configuration.CodecRegistries.fromRegistries
 class DBObjectCodecSpecification extends Specification {
 
     def bsonDoc = new BsonDocument()
-    def codecRegistry = fromProviders([new ValueCodecProvider(), new DBObjectCodecProvider()])
+    def codecRegistry = fromProviders([new ValueCodecProvider(), new DBObjectCodecProvider(), new BsonValueCodecProvider()])
     def dbObjectCodec = new DBObjectCodec(codecRegistry)
 
     def 'should encode and decode UUID as Binary'() {
@@ -114,5 +119,53 @@ class DBObjectCodecSpecification extends Specification {
 
         then:
         decodedUuid.get('byteArray') == new Binary(subType, array)
+    }
+
+    def 'should encode Symbol to BsonSymbol and decode BsonSymbol to String'() {
+        given:
+        def symbol = new Symbol('symbol');
+        def doc = new BasicDBObject('symbol', symbol)
+
+        when:
+        dbObjectCodec.encode(new BsonDocumentWriter(bsonDoc), doc, EncoderContext.builder().build())
+
+        then:
+        bsonDoc.get('symbol') == new BsonSymbol('symbol')
+
+        when:
+        def decodedSymbol = dbObjectCodec.decode(new BsonDocumentReader(bsonDoc), DecoderContext.builder().build())
+
+        then:
+        decodedSymbol.get('symbol') == symbol.toString()
+    }
+
+    def 'should encode java.sql.Date as date'() {
+        given:
+        def sqlDate = new java.sql.Date(System.currentTimeMillis())
+        def doc = new BasicDBObject('d', sqlDate)
+
+        when:
+        dbObjectCodec.encode(new BsonDocumentWriter(bsonDoc), doc, EncoderContext.builder().build())
+
+        then:
+        def decodededDoc = dbObjectCodec.decode(new BsonDocumentReader(bsonDoc), DecoderContext.builder().build())
+
+        then:
+        ((Date) decodededDoc.get('d')).getTime() == sqlDate.getTime()
+    }
+
+    def 'should encode java.sql.Timestamp as date'() {
+        given:
+        def sqlTimestamp = new Timestamp(System.currentTimeMillis())
+        def doc = new BasicDBObject('d', sqlTimestamp)
+
+        when:
+        dbObjectCodec.encode(new BsonDocumentWriter(bsonDoc), doc, EncoderContext.builder().build())
+
+        then:
+        def decodededDoc = dbObjectCodec.decode(new BsonDocumentReader(bsonDoc), DecoderContext.builder().build())
+
+        then:
+        ((Date) decodededDoc.get('d')).getTime() == sqlTimestamp.getTime()
     }
 }

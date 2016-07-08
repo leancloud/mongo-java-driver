@@ -74,19 +74,22 @@ class DBCursorFunctionalSpecification extends FunctionalSpecification {
 
         when:
         dbCursor = collection.find().hint(new BasicDBObject('a', 1))
+        def explainPlan = dbCursor.explain()
 
         then:
-        dbCursor.explain().queryPlanner.winningPlan.inputStage.keyPattern == cursorMap
+        getKeyPattern(explainPlan) == cursorMap
 
         when:
         dbCursor = collection.find().addSpecial('$hint', new BasicDBObject('a', 1))
+        explainPlan = dbCursor.explain()
 
         then:
-        dbCursor.explain().queryPlanner.winningPlan.inputStage.keyPattern == cursorMap
+        getKeyPattern(explainPlan) == cursorMap
     }
 
     def 'should use provided hint for count'() {
         expect:
+        collection.createIndex(new BasicDBObject('a', 1));
         collection.find().hint('a_1').count() == 1
         collection.find().hint(new BasicDBObject('a', 1)).count() == 1
     }
@@ -117,15 +120,17 @@ class DBCursorFunctionalSpecification extends FunctionalSpecification {
 
         when:
         dbCursor = collection.find().hint('a_1')
+        def explainPlan = dbCursor.explain()
 
         then:
-        dbCursor.explain().queryPlanner.winningPlan.inputStage.keyPattern == cursorMap
+        getKeyPattern(explainPlan) == cursorMap
 
         when:
         dbCursor = collection.find().addSpecial('$hint', 'a_1')
+        explainPlan = dbCursor.explain()
 
         then:
-        dbCursor.explain().queryPlanner.winningPlan.inputStage.keyPattern == cursorMap
+        getKeyPattern(explainPlan) == cursorMap
     }
 
     def 'should use provided hints for count'() {
@@ -146,7 +151,7 @@ class DBCursorFunctionalSpecification extends FunctionalSpecification {
         collection.createIndex(new BasicDBObject('x', 1), new BasicDBObject('sparse', true));
 
         then:
-        collection.find(new BasicDBObject('a', 1)).hint('x_1').count() == serverVersionAtLeast(asList(2, 6, 0)) ? 0 : 1
+        collection.find(new BasicDBObject('a', 1)).hint('x_1').count() == (serverVersionAtLeast(asList(2, 6, 0)) ? 0 : 1)
         collection.find().hint('a_1').count() == 2
     }
 
@@ -184,7 +189,7 @@ class DBCursorFunctionalSpecification extends FunctionalSpecification {
         def countWithHint = collection.find(new BasicDBObject('a', 1)).addSpecial('$hint', 'x_1').count()
 
         then:
-        countWithHint == serverVersionAtLeast(asList(2, 6, 0)) ? 0 : 1
+        countWithHint == (serverVersionAtLeast(asList(2, 6, 0)) ? 0 : 1)
     }
 
     @IgnoreIf({ serverVersionAtLeast(asList(3, 0, 0)) })
@@ -208,9 +213,10 @@ class DBCursorFunctionalSpecification extends FunctionalSpecification {
         when:
         dbCursor = collection.find().hint(new BasicDBObject('a', 1))
         dbCursor.addSpecial('$explain', 1)
+        def explainPlan = dbCursor.next()
 
         then:
-        dbCursor.explain().queryPlanner.winningPlan.inputStage.keyPattern == cursorMap
+        getKeyPattern(explainPlan) == cursorMap
     }
 
 
@@ -370,5 +376,13 @@ class DBCursorFunctionalSpecification extends FunctionalSpecification {
 
         then:
         executor.getReadPreference() == ReadPreference.secondaryPreferred()
+    }
+
+    static DBObject getKeyPattern(DBObject explainPlan) {
+        if (explainPlan.queryPlanner.winningPlan.inputStage != null) {
+            return explainPlan.queryPlanner.winningPlan.inputStage.keyPattern
+        } else if (explainPlan.queryPlanner.winningPlan.shards != null) {
+            return explainPlan.queryPlanner.winningPlan.shards[0].winningPlan.inputStage.keyPattern
+        }
     }
 }

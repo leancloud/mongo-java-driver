@@ -19,20 +19,31 @@ package com.mongodb.operation
 import category.Async
 import category.Slow
 import com.mongodb.MongoCredential
+import com.mongodb.MongoNamespace
 import com.mongodb.MongoServerException
 import com.mongodb.MongoTimeoutException
 import com.mongodb.OperationFunctionalSpecification
+import com.mongodb.ReadPreference
+import com.mongodb.async.SingleResultCallback
+import com.mongodb.binding.AsyncConnectionSource
+import com.mongodb.binding.AsyncReadBinding
+import com.mongodb.binding.ConnectionSource
+import com.mongodb.binding.ReadBinding
 import com.mongodb.bulk.InsertRequest
+import com.mongodb.connection.AsyncConnection
 import com.mongodb.connection.ClusterSettings
 import com.mongodb.connection.Connection
+import com.mongodb.connection.ConnectionDescription
 import com.mongodb.connection.ConnectionPoolSettings
 import com.mongodb.connection.DefaultClusterFactory
+import com.mongodb.connection.QueryResult
 import com.mongodb.connection.ServerSettings
+import com.mongodb.connection.ServerVersion
 import com.mongodb.connection.SocketSettings
 import com.mongodb.connection.SocketStreamFactory
 import com.mongodb.connection.StreamFactory
 import com.mongodb.internal.validator.NoOpFieldNameValidator
-import com.mongodb.selector.PrimaryServerSelector
+import com.mongodb.selector.WritableServerSelector
 import org.bson.BsonDocument
 import org.bson.BsonInt32
 import org.bson.codecs.BsonDocumentCodec
@@ -54,7 +65,7 @@ import static com.mongodb.WriteConcern.ACKNOWLEDGED
 import static java.util.Arrays.asList
 
 class UserOperationsSpecification extends OperationFunctionalSpecification {
-    def credential = createCredential('newUser', databaseName, '123'.toCharArray())
+    def credential = createCredential('\u53f0\u5317', databaseName, 'Ta\u0301ibe\u030Ci'.toCharArray())
 
     def 'an added user should be found'() {
         given:
@@ -91,7 +102,7 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
         def cluster = getCluster()
 
         when:
-        def server = cluster.selectServer(new PrimaryServerSelector())
+        def server = cluster.selectServer(new WritableServerSelector())
         def connection = server.getConnection()
         testConnection(connection)
 
@@ -111,7 +122,7 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
         def cluster = getCluster()
 
         when:
-        def server = cluster.selectServer(new PrimaryServerSelector())
+        def server = cluster.selectServer(new WritableServerSelector())
         def connection = server.getConnection()
         testConnection(connection)
 
@@ -132,7 +143,7 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
         def cluster = getCluster(ClusterSettings.builder().serverSelectionTimeout(1, TimeUnit.SECONDS))
 
         when:
-        cluster.selectServer(new PrimaryServerSelector())
+        cluster.selectServer(new WritableServerSelector())
 
         then:
         thrown(MongoTimeoutException)
@@ -149,7 +160,7 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
         def cluster = getCluster(ClusterSettings.builder().serverSelectionTimeout(1, TimeUnit.SECONDS))
 
         when:
-        cluster.selectServer(new PrimaryServerSelector())
+        cluster.selectServer(new WritableServerSelector())
 
         then:
         thrown(MongoTimeoutException)
@@ -166,7 +177,7 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
         def cluster = getCluster(newCredentials)
 
         when:
-        def server = cluster.selectServer(new PrimaryServerSelector())
+        def server = cluster.selectServer(new WritableServerSelector())
         def connection = server.getConnection()
         testConnection(connection)
 
@@ -188,7 +199,7 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
         def cluster = getAsyncCluster(newCredentials)
 
         when:
-        def server = cluster.selectServer(new PrimaryServerSelector())
+        def server = cluster.selectServer(new WritableServerSelector())
         def connection = server.getConnection()
         testConnection(connection)
 
@@ -264,7 +275,7 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
                             asList(new InsertRequest(new BsonDocument()))).execute(getBinding(cluster))
 
         then:
-        new CountOperation(getNamespace()).execute(getBinding(cluster)) == 1
+        new CountOperation(getNamespace()).execute(getBinding(cluster)) == 1L
 
         cleanup:
         new DropUserOperation('admin', rwCredential.userName).execute(getBinding())
@@ -301,12 +312,89 @@ class UserOperationsSpecification extends OperationFunctionalSpecification {
         def count = new CountOperation(getNamespace()).execute(getBinding())
 
         then:
-        count == 0
+        count == 0L
 
         cleanup:
         new DropUserOperation('admin', roCredential.userName).execute(getBinding())
         cluster?.close()
     }
+
+
+    def 'should use the ReadBindings readPreference to set slaveOK'() {
+        given:
+        def connection = Mock(Connection)
+        def connectionSource = Stub(ConnectionSource) {
+            getConnection() >> connection
+        }
+        def readBinding = Stub(ReadBinding) {
+            getReadConnectionSource() >> connectionSource
+            getReadPreference() >> readPreference
+        }
+        def operation = new UserExistsOperation(helper.dbName, 'user')
+
+        when:
+        operation.execute(readBinding)
+
+        then:
+        _ * connection.getDescription() >> helper.twoFourConnectionDescription
+        1 * connection.query(_, _, _, _, _, _, readPreference.isSlaveOk(), _, _, _, _, _, _) >>  helper.queryResult
+        1 * connection.release()
+
+        when: '2.6.0'
+        operation.execute(readBinding)
+
+        then:
+        _ * connection.getDescription() >> helper.twoSixConnectionDescription
+        1 * connection.command(helper.dbName, _, readPreference.isSlaveOk(), _, _) >> helper.cursorResult
+
+        where:
+        readPreference << [ReadPreference.primary(), ReadPreference.secondary()]
+    }
+
+    def 'should use the AsyncReadBindings readPreference to set slaveOK'() {
+        given:
+        def connection = Mock(AsyncConnection)
+        def connectionSource = Stub(AsyncConnectionSource) {
+            getConnection(_) >> { it[0].onResult(connection, null) }
+        }
+        def readBinding = Stub(AsyncReadBinding) {
+            getReadPreference() >> readPreference
+            getReadConnectionSource(_) >> { it[0].onResult(connectionSource, null) }
+        }
+        def operation = new UserExistsOperation(helper.dbName, 'user')
+
+        when:
+        operation.executeAsync(readBinding, Stub(SingleResultCallback))
+
+        then:
+        _ * connection.getDescription() >> helper.twoFourConnectionDescription
+        1 * connection.queryAsync(_, _, _, _, _, _, readPreference.isSlaveOk(), _, _, _, _, _, _, _) >> {
+            it[13].onResult(helper.queryResult, null) }
+
+        when: '2.6.0'
+        operation.executeAsync(readBinding, Stub(SingleResultCallback))
+
+        then:
+        _ * connection.getDescription() >> helper.twoSixConnectionDescription
+        1 * connection.commandAsync(helper.dbName, _, readPreference.isSlaveOk(), _, _, _) >> {
+            it[5].onResult(helper.cursorResult, null) }
+
+        where:
+        readPreference << [ReadPreference.primary(), ReadPreference.secondary()]
+    }
+
+    def helper = [
+            dbName: 'db',
+            namespace: new MongoNamespace('db', 'coll'),
+            twoFourConnectionDescription: Stub(ConnectionDescription) {
+                getServerVersion() >> new ServerVersion([2, 4, 0])
+            },
+            twoSixConnectionDescription : Stub(ConnectionDescription) {
+                getServerVersion() >> new ServerVersion([2, 6, 0])
+            },
+            queryResult: Stub(QueryResult),
+            cursorResult: BsonDocument.parse('{ok: 1.0, users: []}')
+    ]
 
     def getCluster() {
         getCluster(credential)

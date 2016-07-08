@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import com.mongodb.bulk.DeleteRequest
 import com.mongodb.bulk.InsertRequest
 import com.mongodb.bulk.UpdateRequest
 import com.mongodb.bulk.WriteRequest
+import com.mongodb.diagnostics.logging.Logger
 import com.mongodb.internal.validator.NoOpFieldNameValidator
 import org.bson.BsonBoolean
 import org.bson.BsonDocument
@@ -41,7 +42,7 @@ import static java.util.Arrays.asList
 class DefaultServerConnectionSpecification extends Specification {
     def namespace = new MongoNamespace('test', 'test')
     def internalConnection = Mock(InternalConnection)
-    def callback = errorHandlingCallback(Mock(SingleResultCallback))
+    def callback = errorHandlingCallback(Mock(SingleResultCallback), Mock(Logger))
     def executor = Mock(ProtocolExecutor)
     @Shared
     def standaloneConnectionDescription = new ConnectionDescription(new ConnectionId(new ServerId(new ClusterId(), new ServerAddress())),
@@ -92,7 +93,7 @@ class DefaultServerConnectionSpecification extends Specification {
         connection.insertCommand(namespace, true, ACKNOWLEDGED, inserts)
 
         then:
-        1 * executor.execute({ compare(new InsertCommandProtocol(namespace, true, ACKNOWLEDGED, inserts), it) }, internalConnection)
+        1 * executor.execute({ compare(new InsertCommandProtocol(namespace, true, ACKNOWLEDGED, null, inserts), it) }, internalConnection)
     }
 
     def 'should execute update command protocol'() {
@@ -103,7 +104,7 @@ class DefaultServerConnectionSpecification extends Specification {
         connection.updateCommand(namespace, true, ACKNOWLEDGED, updates)
 
         then:
-        1 * executor.execute({ compare(new UpdateCommandProtocol(namespace, true, ACKNOWLEDGED, updates), it) }, internalConnection)
+        1 * executor.execute({ compare(new UpdateCommandProtocol(namespace, true, ACKNOWLEDGED, null, updates), it) }, internalConnection)
     }
 
     def 'should execute delete command protocol'() {
@@ -224,7 +225,13 @@ class DefaultServerConnectionSpecification extends Specification {
         connection.killCursor([5])
 
         then:
-        1 * executor.execute({ compare(new KillCursorProtocol([5]), it) }, internalConnection)
+        1 * executor.execute({ compare(new KillCursorProtocol(null, [5]), it) }, internalConnection)
+
+        when:
+        connection.killCursor(namespace, [5])
+
+        then:
+        1 * executor.execute({ compare(new KillCursorProtocol(namespace, [5]), it) }, internalConnection)
     }
 
     def 'should execute insert protocol asynchronously'() {
@@ -269,7 +276,7 @@ class DefaultServerConnectionSpecification extends Specification {
         connection.insertCommandAsync(namespace, true, ACKNOWLEDGED, inserts, callback)
 
         then:
-        1 * executor.executeAsync({ compare(new InsertCommandProtocol(namespace, true, ACKNOWLEDGED, inserts), it) },
+        1 * executor.executeAsync({ compare(new InsertCommandProtocol(namespace, true, ACKNOWLEDGED, null, inserts), it) },
                                   internalConnection, callback)
     }
 
@@ -281,7 +288,7 @@ class DefaultServerConnectionSpecification extends Specification {
         connection.updateCommandAsync(namespace, true, ACKNOWLEDGED, updates, callback)
 
         then:
-        1 * executor.executeAsync({ compare(new UpdateCommandProtocol(namespace, true, ACKNOWLEDGED, updates), it) },
+        1 * executor.executeAsync({ compare(new UpdateCommandProtocol(namespace, true, ACKNOWLEDGED, null, updates), it) },
                                   internalConnection, callback)
     }
 
@@ -405,6 +412,12 @@ class DefaultServerConnectionSpecification extends Specification {
         connection.killCursorAsync([5], callback)
 
         then:
-        1 * executor.executeAsync({ compare(new KillCursorProtocol([5]), it) }, internalConnection, callback)
+        1 * executor.executeAsync({ compare(new KillCursorProtocol(null, [5]), it) }, internalConnection, callback)
+
+        when:
+        connection.killCursorAsync(namespace, [5], callback)
+
+        then:
+        1 * executor.executeAsync({ compare(new KillCursorProtocol(namespace, [5]), it) }, internalConnection, callback)
     }
 }

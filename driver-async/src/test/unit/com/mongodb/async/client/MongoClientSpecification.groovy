@@ -16,7 +16,9 @@
 
 package com.mongodb.async.client
 
+import com.mongodb.ReadConcern
 import com.mongodb.WriteConcern
+import com.mongodb.client.model.geojson.MultiPolygon
 import com.mongodb.connection.Cluster
 import org.bson.BsonDocument
 import org.bson.Document
@@ -37,7 +39,7 @@ class MongoClientSpecification extends Specification {
         def cluster = Stub(Cluster)
         def executor = new TestOperationExecutor([null, null, null])
         def client = new MongoClientImpl(settings, cluster, executor)
-        def codecRegistry = client.getDefaultCodecRegistry()
+        def codecRegistry = MongoClients.getDefaultCodecRegistry()
 
         when:
         def listDatabasesIterable = client.listDatabases()
@@ -71,6 +73,7 @@ class MongoClientSpecification extends Specification {
         def settings = MongoClientSettings.builder()
                                           .readPreference(secondary())
                                           .writeConcern(WriteConcern.MAJORITY)
+                                          .readConcern(ReadConcern.MAJORITY)
                                           .codecRegistry(codecRegistry)
                                           .build()
         def client = new MongoClientImpl(settings, Stub(Cluster), new TestOperationExecutor([]))
@@ -83,7 +86,18 @@ class MongoClientSpecification extends Specification {
 
         where:
         expectedDatabase << new MongoDatabaseImpl('name', fromProviders([new BsonValueCodecProvider()]), secondary(),
-                WriteConcern.MAJORITY, new TestOperationExecutor([]))
+                WriteConcern.MAJORITY, ReadConcern.MAJORITY, new TestOperationExecutor([]))
     }
 
+    def 'default codec registry should contain all supported providers'() {
+        given:
+        def codecRegistry = MongoClients.getDefaultCodecRegistry()
+
+        expect:
+        codecRegistry.get(BsonDocument)
+        codecRegistry.get(Document)
+        codecRegistry.get(Integer)
+        codecRegistry.get(MultiPolygon)
+        codecRegistry.get(Iterable)
+    }
 }

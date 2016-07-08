@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,14 +32,21 @@ import com.mongodb.connection.Connection;
 import com.mongodb.connection.DefaultClusterFactory;
 import com.mongodb.connection.ServerDescription;
 import com.mongodb.connection.SocketStreamFactory;
+import com.mongodb.event.ClusterListener;
+import com.mongodb.event.CommandEventMulticaster;
+import com.mongodb.event.CommandListener;
 import com.mongodb.internal.connection.PowerOfTwoBufferPool;
+import com.mongodb.internal.thread.DaemonThreadFactory;
 import com.mongodb.management.JMXConnectionPoolListener;
+import com.mongodb.operation.CurrentOpOperation;
+import com.mongodb.operation.FsyncUnlockOperation;
 import com.mongodb.operation.ListDatabasesOperation;
 import com.mongodb.operation.OperationExecutor;
 import com.mongodb.operation.ReadOperation;
 import com.mongodb.operation.WriteOperation;
 import com.mongodb.selector.LatencyMinimizingServerSelector;
 import com.mongodb.selector.ServerSelector;
+import org.bson.BsonBoolean;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -51,13 +58,12 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.mongodb.ReadPreference.primary;
 import static com.mongodb.connection.ClusterConnectionMode.MULTIPLE;
 import static com.mongodb.connection.ClusterType.REPLICA_SET;
 import static java.util.Arrays.asList;
+import static java.util.Collections.singletonList;
 import static java.util.Collections.unmodifiableList;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -80,6 +86,7 @@ public class Mongo {
 
     private volatile WriteConcern writeConcern;
     private volatile ReadPreference readPreference;
+    private final ReadConcern readConcern;
 
     private final MongoClientOptions options;
     private final List<MongoCredential> credentialsList;
@@ -89,7 +96,7 @@ public class Mongo {
     private final Cluster cluster;
     private final BufferProvider bufferProvider = new PowerOfTwoBufferPool();
 
-    private final ConcurrentLinkedQueue<ServerCursor> orphanedCursors = new ConcurrentLinkedQueue<ServerCursor>();
+    private final ConcurrentLinkedQueue<ServerCursorAndNamespace> orphanedCursors = new ConcurrentLinkedQueue<ServerCursorAndNamespace>();
     private final ExecutorService cursorCleaningService;
 
     /**
@@ -202,16 +209,18 @@ public class Mongo {
     }
 
     /**
-     * <p>Creates a Mongo based on a list of replica set members or a list of mongos. It will find all members (the master will be used by
-     * default). If you pass in a single server in the list, the driver will still function as if it is a replica set. If you have a
-     * standalone server, use the Mongo(ServerAddress) constructor.</p>
+     * <p>Creates an instance based on a list of replica set members or mongos servers. For a replica set it will discover all members.
+     * For a list with a single seed, the driver will still discover all members of the replica set.  For a direct
+     * connection to a replica set member, with no discovery, use the {@link #Mongo(ServerAddress)} constructor instead.</p>
      *
-     * <p>If this is a list of mongos servers, it will pick the closest (lowest ping time) one to send all requests to, and automatically
-     * fail over to the next server if the closest is down.</p>
+     * <p>When there is more than one server to choose from based on the type of request (read or write) and the read preference (if it's a
+     * read request), the driver will randomly select a server to send a request. This applies to both replica sets and sharded clusters.
+     * The servers to randomly select from are further limited by the local threshold.  See
+     * {@link MongoClientOptions#getLocalThreshold()}</p>
      *
      * @param seeds Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list of mongod
      *              servers in the same replica set or a list of mongos servers in the same sharded cluster.
-     * @see com.mongodb.ServerAddress
+     * @see MongoClientOptions#getLocalThreshold()
      * @deprecated Replaced by {@link MongoClient#MongoClient(java.util.List)}
      */
     @Deprecated
@@ -220,17 +229,20 @@ public class Mongo {
     }
 
     /**
-     * <p>Creates a Mongo based on a list of replica set members or a list of mongos. It will find all members (the master will be used by
-     * default). If you pass in a single server in the list, the driver will still function as if it is a replica set. If you have a
-     * standalone server, use the Mongo(ServerAddress) constructor.</p>
+     * <p>Creates an instance based on a list of replica set members or mongos servers. For a replica set it will discover all members.
+     * For a list with a single seed, the driver will still discover all members of the replica set.  For a direct
+     * connection to a replica set member, with no discovery, use the {@link #Mongo(ServerAddress, MongoClientOptions)} constructor
+     * instead.</p>
      *
-     * <p>If this is a list of mongos servers, it will pick the closest (lowest ping time) one to send all requests to, and automatically
-     * fail over to the next server if the closest is down.</p>
+     * <p>When there is more than one server to choose from based on the type of request (read or write) and the read preference (if it's a
+     * read request), the driver will randomly select a server to send a request. This applies to both replica sets and sharded clusters.
+     * The servers to randomly select from are further limited by the local threshold.  See
+     * {@link MongoClientOptions#getLocalThreshold()}</p>
      *
-     * @param seeds   Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list of
-     *                mongod servers in the same replica set or a list of mongos servers in the same sharded cluster.
-     * @param options for configuring this Mongo instance
-     * @see com.mongodb.ServerAddress
+     * @param seeds Put as many servers as you can in the list and the system will figure out the rest.  This can either be a list of mongod
+     *              servers in the same replica set or a list of mongos servers in the same sharded cluster.
+     * @param options the options
+     * @see MongoClientOptions#getLocalThreshold()
      * @deprecated Replaced by {@link MongoClient#MongoClient(java.util.List, MongoClientOptions)}
      */
     @Deprecated
@@ -290,36 +302,60 @@ public class Mongo {
         this.options = options;
         this.readPreference = options.getReadPreference() != null ? options.getReadPreference() : primary();
         this.writeConcern = options.getWriteConcern() != null ? options.getWriteConcern() : WriteConcern.UNACKNOWLEDGED;
+        this.readConcern = options.getReadConcern() != null ? options.getReadConcern() : ReadConcern.DEFAULT;
         this.optionHolder = new Bytes.OptionHolder(null);
         this.credentialsList = unmodifiableList(credentialsList);
         cursorCleaningService = options.isCursorFinalizerEnabled() ? createCursorCleaningService() : null;
     }
 
     /**
-     * Sets the write concern for this database. Will be used as default for writes to any collection in any database. See the documentation
-     * for {@link WriteConcern} for more information.
+     * Sets the default write concern to use for write operations executed on any {@link DBCollection} created indirectly from this
+     * instance, via a {@link DB} instance created from {@link #getDB(String)}.
+     *
+     * <p>
+     *     Note that changes to the default write concern made via this method will NOT affect the write concern of
+     *     {@link com.mongodb.client.MongoDatabase} instances created via {@link MongoClient#getDatabase(String)}
+     * </p>
      *
      * @param writeConcern write concern to use
+     * @deprecated Set the default write concern with either {@link MongoClientURI} or {@link MongoClientOptions}
      */
+    @Deprecated
     public void setWriteConcern(final WriteConcern writeConcern) {
         this.writeConcern = writeConcern;
     }
 
     /**
-     * Gets the default write concern
+     * Gets the write concern
      *
-     * @return the default write concern
+     * @return the write concern
      */
     public WriteConcern getWriteConcern() {
         return writeConcern;
     }
 
     /**
-     * Sets the read preference for this database. Will be used as default for reads from any collection in any database. See the
-     * documentation for {@link ReadPreference} for more information.
+     * Gets the read concern
      *
-     * @param readPreference Read Preference to use
+     * @return the read concern
      */
+    public ReadConcern getReadConcern() {
+        return readConcern;
+    }
+
+    /**
+     * Sets the default read preference to use for reads operations executed on any {@link DBCollection} created indirectly from this
+     * instance, via a {@link DB} instance created from {@link #getDB(String)}.
+     *
+     * <p>
+     *     Note that changes to the default read preference made via this method will NOT affect the read preference of
+     *     {@link com.mongodb.client.MongoDatabase} instances created via {@link MongoClient#getDatabase(String)}
+     * </p>
+
+     * @param readPreference Read Preference to use
+     * @deprecated Set the default read preference with either {@link MongoClientURI} or {@link MongoClientOptions}
+     */
+    @Deprecated
     public void setReadPreference(final ReadPreference readPreference) {
         this.readPreference = readPreference;
     }
@@ -352,7 +388,7 @@ public class Mongo {
      */
     public List<ServerAddress> getServerAddressList() {
         List<ServerAddress> serverAddresses = new ArrayList<ServerAddress>();
-        for (final ServerDescription cur : getClusterDescription().getAll()) {
+        for (final ServerDescription cur : getClusterDescription().getServerDescriptions()) {
             serverAddresses.add(cur.getAddress());
         }
         return serverAddresses;
@@ -367,6 +403,7 @@ public class Mongo {
      *
      * @return the address
      */
+    @SuppressWarnings("deprecation")
     public ServerAddress getAddress() {
         ClusterDescription description = getClusterDescription();
         if (description.getPrimaries().isEmpty()) {
@@ -422,6 +459,13 @@ public class Mongo {
 
     /**
      * Gets a database object. Users should use {@link com.mongodb.MongoClient#getDatabase(String)} instead.
+     *
+     * <p>
+     * The {@link DB} class has been superseded by {@link com.mongodb.client.MongoDatabase}.  The deprecation of this method effectively
+     * deprecates the {@link DB}, {@link DBCollection}, and {@link DBCursor} classes, among others; but in order to give users time to
+     * migrate to the new API without experiencing a huge number of compiler warnings, those classes have not yet been formally
+     * deprecated.
+     * </p>
      *
      * @param dbName the name of the database to retrieve
      * @return a DB representing the specified database
@@ -486,35 +530,58 @@ public class Mongo {
     }
 
     /**
-     * Set the default query options.
+     * Set the default query options for reads operations executed on any {@link DBCollection} created indirectly from this
+     * instance, via a {@link DB} instance created from {@link #getDB(String)}.
+     *
+     * <p>
+     *     Note that changes to query options made via this method will NOT affect
+     *     {@link com.mongodb.client.MongoDatabase} instances created via {@link MongoClient#getDatabase(String)}
+     * </p>
      *
      * @param options value to be set
+     * @deprecated Set options on instances of {@link DBCursor}
      */
+    @Deprecated
     public void setOptions(final int options) {
         optionHolder.set(options);
     }
 
     /**
-     * Reset the default query options.
+     * Reset the default query options for reads operations executed on any {@link DBCollection} created indirectly from this
+     * instance, via a {@link DB} instance created from {@link #getDB(String)}.
+     *
+     * @deprecated Reset options instead on instances of {@link DBCursor}
      */
+    @Deprecated
     public void resetOptions() {
         optionHolder.reset();
     }
 
     /**
-     * Add the default query option.
+     * Add the default query option for reads operations executed on any {@link DBCollection} created indirectly from this
+     * instance, via a {@link DB} instance created from {@link #getDB(String)}.
+     *
+     * <p>
+     *     Note that changes to query options made via this method will NOT affect
+     *     {@link com.mongodb.client.MongoDatabase} instances created via {@link MongoClient#getDatabase(String)}
+     * </p>
      *
      * @param option value to be added to current options
+     * @deprecated Add options instead on instances of {@link DBCursor}
      */
+    @Deprecated
     public void addOption(final int option) {
         optionHolder.add(option);
     }
 
     /**
-     * Gets the default query options
+     * Gets the default query options for reads operations executed on any {@link DBCollection} created indirectly from this
+     * instance, via a {@link DB} instance created from {@link #getDB(String)}.
      *
      * @return an int representing the options to be used by queries
+     * @deprecated Get options instead from instances of {@link DBCursor}
      */
+    @Deprecated
     public int getOptions() {
         return optionHolder.get();
     }
@@ -559,7 +626,7 @@ public class Mongo {
      * @mongodb.driver.manual reference/command/fsync/ fsync command
      */
     public DBObject unlock() {
-        return getDB(ADMIN_DATABASE_NAME).getCollection("$cmd.sys.unlock").findOne();
+        return DBObjects.toDBObject(execute(new FsyncUnlockOperation()));
     }
 
     /**
@@ -570,9 +637,8 @@ public class Mongo {
      * @mongodb.driver.manual reference/command/fsync/ fsync command
      */
     public boolean isLocked() {
-        DBCollection inprogCollection = getDB(ADMIN_DATABASE_NAME).getCollection("$cmd.sys.inprog");
-        BasicDBObject result = (BasicDBObject) inprogCollection.findOne();
-        return result.containsField("fsyncLock") && result.getInt("fsyncLock") == 1;
+        return execute(new CurrentOpOperation(), ReadPreference.primary())
+               .getBoolean("fsyncLock", BsonBoolean.FALSE).getValue();
     }
 
     @Override
@@ -589,6 +655,7 @@ public class Mongo {
      * @return the maximum size, or 0 if not obtained from servers yet.
      * @throws MongoException if there's a failure
      */
+    @SuppressWarnings("deprecation")
     public int getMaxBsonObjectSize() {
         List<ServerDescription> primaries = getClusterDescription().getPrimaries();
         return primaries.isEmpty() ? ServerDescription.getDefaultMaxDocumentSize() : primaries.get(0).getMaxDocumentSize();
@@ -636,8 +703,7 @@ public class Mongo {
                                             .serverSelectionTimeout(options.getServerSelectionTimeout(), MILLISECONDS)
                                             .serverSelector(createServerSelector(options))
                                             .description(options.getDescription())
-                                            .maxWaitQueueSize(options.getConnectionPoolSettings().getMaxWaitQueueSize())
-                                            .build(),
+                                            .maxWaitQueueSize(options.getConnectionPoolSettings().getMaxWaitQueueSize()),
                              credentialsList, options);
     }
 
@@ -650,14 +716,16 @@ public class Mongo {
                                             .serverSelectionTimeout(options.getServerSelectionTimeout(), MILLISECONDS)
                                             .serverSelector(createServerSelector(options))
                                             .description(options.getDescription())
-                                            .maxWaitQueueSize(options.getConnectionPoolSettings().getMaxWaitQueueSize())
-                                            .build(),
+                                            .maxWaitQueueSize(options.getConnectionPoolSettings().getMaxWaitQueueSize()),
                              credentialsList, options);
     }
 
-    private static Cluster createCluster(final ClusterSettings settings, final List<MongoCredential> credentialsList,
+    private static Cluster createCluster(final ClusterSettings.Builder settingsBuilder, final List<MongoCredential> credentialsList,
                                          final MongoClientOptions options) {
-        return new DefaultClusterFactory().create(settings,
+        for (ClusterListener cur : options.getClusterListeners()) {
+            settingsBuilder.addClusterListener(cur);
+        }
+        return new DefaultClusterFactory().create(settingsBuilder.build(),
                                                   options.getServerSettings(),
                                                   options.getConnectionPoolSettings(),
                                                   new SocketStreamFactory(options.getSocketSettings(),
@@ -666,8 +734,20 @@ public class Mongo {
                                                   new SocketStreamFactory(options.getHeartbeatSocketSettings(),
                                                                           options.getSslSettings(),
                                                                           options.getSocketFactory()),
-                                                  credentialsList,
-                                                  null, new JMXConnectionPoolListener(), null);
+                                                  credentialsList, null,
+                                                  new JMXConnectionPoolListener(), null,
+                                                  createCommandListener(options.getCommandListeners()));
+    }
+
+    private static CommandListener createCommandListener(final List<CommandListener> commandListeners) {
+        switch (commandListeners.size()) {
+            case 0:
+                return null;
+            case 1:
+                return commandListeners.get(0);
+            default:
+                return new CommandEventMulticaster(commandListeners);
+        }
     }
 
     private static List<ServerAddress> createNewSeedList(final List<ServerAddress> seedList) {
@@ -714,8 +794,8 @@ public class Mongo {
         return new ClusterBinding(getCluster(), readPreference);
     }
 
-    void addOrphanedCursor(final ServerCursor serverCursor) {
-        orphanedCursors.add(serverCursor);
+    void addOrphanedCursor(final ServerCursor serverCursor, final MongoNamespace namespace) {
+        orphanedCursors.add(new ServerCursorAndNamespace(serverCursor, namespace));
     }
 
     OperationExecutor createOperationExecutor() {
@@ -762,15 +842,15 @@ public class Mongo {
     }
 
     private void cleanCursors() {
-        ServerCursor cur;
+        ServerCursorAndNamespace cur;
         while ((cur = orphanedCursors.poll()) != null) {
-            ReadWriteBinding binding = new SingleServerBinding(cluster, cur.getAddress());
+            ReadWriteBinding binding = new SingleServerBinding(cluster, cur.serverCursor.getAddress());
             try {
                 ConnectionSource source = binding.getReadConnectionSource();
                 try {
                     Connection connection = source.getConnection();
                     try {
-                        connection.killCursor(asList(cur.getId()));
+                        connection.killCursor(cur.namespace, singletonList(cur.serverCursor.getId()));
                     } finally {
                         connection.release();
                     }
@@ -788,6 +868,16 @@ public class Mongo {
             return ClusterConnectionMode.SINGLE;
         } else {
             return ClusterConnectionMode.MULTIPLE;
+        }
+    }
+
+    private static class ServerCursorAndNamespace {
+        private final ServerCursor serverCursor;
+        private final MongoNamespace namespace;
+
+        public ServerCursorAndNamespace(final ServerCursor serverCursor, final MongoNamespace namespace) {
+            this.serverCursor = serverCursor;
+            this.namespace = namespace;
         }
     }
 
@@ -850,24 +940,6 @@ public class Mongo {
 
         private String toKey(final MongoClientURI uri) {
             return uri.toString();
-        }
-    }
-
-    // Custom thread factory for scheduled executor service that creates daemon threads.  Otherwise,
-    // applications that neglect to close MongoClient will not exit.
-    static class DaemonThreadFactory implements ThreadFactory {
-        private static final AtomicInteger poolNumber = new AtomicInteger(1);
-        private final AtomicInteger threadNumber = new AtomicInteger(1);
-        private final String namePrefix;
-
-        DaemonThreadFactory() {
-            namePrefix = "pool-" + poolNumber.getAndIncrement() + "-thread-";
-        }
-
-        public Thread newThread(final Runnable runnable) {
-            Thread t = new Thread(runnable, namePrefix + threadNumber.getAndIncrement());
-            t.setDaemon(true);
-            return t;
         }
     }
 }

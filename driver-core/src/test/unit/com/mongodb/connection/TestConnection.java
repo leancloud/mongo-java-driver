@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ import org.bson.codecs.Decoder;
 
 import java.util.List;
 
-@SuppressWarnings({"rawtypes", "unchecked"})
+@SuppressWarnings({"rawtypes", "unchecked", "deprecation"})
 class TestConnection implements Connection, AsyncConnection {
     private final InternalConnection internalConnection;
     private final ProtocolExecutor executor;
@@ -69,8 +69,7 @@ class TestConnection implements Connection, AsyncConnection {
 
     @Override
     public void insertAsync(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
-                            final List<InsertRequest> inserts,
-                            final SingleResultCallback<WriteConcernResult> callback) {
+                            final List<InsertRequest> inserts, final SingleResultCallback<WriteConcernResult> callback) {
         executeEnqueuedProtocolAsync(callback);
     }
 
@@ -82,8 +81,7 @@ class TestConnection implements Connection, AsyncConnection {
 
     @Override
     public void updateAsync(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
-                            final List<UpdateRequest> updates,
-                            final SingleResultCallback<WriteConcernResult> callback) {
+                            final List<UpdateRequest> updates, final SingleResultCallback<WriteConcernResult> callback) {
         executeEnqueuedProtocolAsync(callback);
     }
 
@@ -103,12 +101,24 @@ class TestConnection implements Connection, AsyncConnection {
     @Override
     public BulkWriteResult insertCommand(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                          final List<InsertRequest> inserts) {
+        throw new UnsupportedOperationException("Deprecated method called directly - this should have been updated");
+    }
+
+    @Override
+    public BulkWriteResult insertCommand(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
+                                         final Boolean bypassDocumentValidation, final List<InsertRequest> inserts) {
         return executeEnqueuedProtocol();
     }
 
     @Override
     public void insertCommandAsync(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
-                                   final List<InsertRequest> inserts,
+                                   final List<InsertRequest> inserts, final SingleResultCallback<BulkWriteResult> callback) {
+        throw new UnsupportedOperationException("Deprecated method called directly - this should have been updated");
+    }
+
+    @Override
+    public void insertCommandAsync(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
+                                   final Boolean bypassDocumentValidation, final List<InsertRequest> inserts,
                                    final SingleResultCallback<BulkWriteResult> callback) {
         executeEnqueuedProtocolAsync(callback);
     }
@@ -116,12 +126,24 @@ class TestConnection implements Connection, AsyncConnection {
     @Override
     public BulkWriteResult updateCommand(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                          final List<UpdateRequest> updates) {
+        throw new UnsupportedOperationException("Deprecated method called directly - this should have been updated");
+    }
+
+    @Override
+    public BulkWriteResult updateCommand(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
+                                         final Boolean bypassDocumentValidation, final List<UpdateRequest> updates) {
         return executeEnqueuedProtocol();
     }
 
     @Override
     public void updateCommandAsync(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
-                                   final List<UpdateRequest> updates,
+                                   final List<UpdateRequest> updates, final SingleResultCallback<BulkWriteResult> callback) {
+        throw new UnsupportedOperationException("Deprecated method called directly - this should have been updated");
+    }
+
+    @Override
+    public void updateCommandAsync(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
+                                   final Boolean bypassDocumentValidation, final List<UpdateRequest> updates,
                                    final SingleResultCallback<BulkWriteResult> callback) {
         executeEnqueuedProtocolAsync(callback);
     }
@@ -163,11 +185,30 @@ class TestConnection implements Connection, AsyncConnection {
     }
 
     @Override
+    public <T> QueryResult<T> query(final MongoNamespace namespace, final BsonDocument queryDocument, final BsonDocument fields,
+                                    final int skip, final int limit,
+                                    final int batchSize, final boolean slaveOk, final boolean tailableCursor, final boolean awaitData,
+                                    final boolean noCursorTimeout,
+                                    final boolean partial, final boolean oplogReplay, final Decoder<T> resultDecoder) {
+        return executeEnqueuedProtocol();
+    }
+
+    @Override
     public <T> void queryAsync(final MongoNamespace namespace, final BsonDocument queryDocument, final BsonDocument fields,
                                final int numberToReturn, final int skip,
                                final boolean slaveOk, final boolean tailableCursor, final boolean awaitData, final boolean noCursorTimeout,
                                final boolean partial,
                                final boolean oplogReplay, final Decoder<T> resultDecoder,
+                               final SingleResultCallback<QueryResult<T>> callback) {
+        executeEnqueuedProtocolAsync(callback);
+    }
+
+    @Override
+    public <T> void queryAsync(final MongoNamespace namespace, final BsonDocument queryDocument, final BsonDocument fields, final int skip,
+                               final int limit,
+                               final int batchSize, final boolean slaveOk, final boolean tailableCursor, final boolean awaitData,
+                               final boolean noCursorTimeout,
+                               final boolean partial, final boolean oplogReplay, final Decoder<T> resultDecoder,
                                final SingleResultCallback<QueryResult<T>> callback) {
         executeEnqueuedProtocolAsync(callback);
     }
@@ -191,7 +232,17 @@ class TestConnection implements Connection, AsyncConnection {
     }
 
     @Override
+    public void killCursor(final MongoNamespace namespace, final List<Long> cursors) {
+        executeEnqueuedProtocol();
+    }
+
+    @Override
     public void killCursorAsync(final List<Long> cursors, final SingleResultCallback<Void> callback) {
+        executeEnqueuedProtocolAsync(callback);
+    }
+
+    @Override
+    public void killCursorAsync(final MongoNamespace namespace, final List<Long> cursors, final SingleResultCallback<Void> callback) {
         executeEnqueuedProtocolAsync(callback);
     }
 

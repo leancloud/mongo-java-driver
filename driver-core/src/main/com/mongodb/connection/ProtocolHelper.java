@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,14 +27,31 @@ import com.mongodb.MongoQueryException;
 import com.mongodb.ServerAddress;
 import com.mongodb.WriteConcernException;
 import com.mongodb.WriteConcernResult;
+import com.mongodb.diagnostics.logging.Logger;
+import com.mongodb.diagnostics.logging.Loggers;
+import com.mongodb.event.CommandFailedEvent;
+import com.mongodb.event.CommandListener;
+import com.mongodb.event.CommandStartedEvent;
+import com.mongodb.event.CommandSucceededEvent;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
 import org.bson.BsonInt32;
+import org.bson.BsonReader;
 import org.bson.BsonString;
+import org.bson.BsonType;
 import org.bson.BsonValue;
+import org.bson.codecs.BsonValueCodecProvider;
+import org.bson.codecs.DecoderContext;
+import org.bson.codecs.configuration.CodecRegistry;
 import org.bson.io.BsonOutput;
 
+import static java.lang.String.format;
+import static org.bson.codecs.BsonValueCodecProvider.getClassForBsonType;
+import static org.bson.codecs.configuration.CodecRegistries.fromProviders;
+
 final class ProtocolHelper {
+    private static final Logger PROTOCOL_EVENT_LOGGER = Loggers.getLogger("protocol.event");
+    private static final CodecRegistry REGISTRY = fromProviders(new BsonValueCodecProvider());
 
     static WriteConcernResult getWriteResult(final BsonDocument result, final ServerAddress serverAddress) {
         if (!isCommandOk(result)) {
@@ -58,6 +75,27 @@ final class ProtocolHelper {
 
     static boolean isCommandOk(final BsonDocument response) {
         BsonValue okValue = response.get("ok");
+        return isCommandOk(okValue);
+    }
+
+    static boolean isCommandOk(final BsonReader bsonReader) {
+        return isCommandOk(getField(bsonReader, "ok"));
+    }
+
+    private static BsonValue getField(final BsonReader bsonReader, final String fieldName) {
+        bsonReader.readStartDocument();
+        while (bsonReader.readBsonType() != BsonType.END_OF_DOCUMENT) {
+            if (bsonReader.readName().equals(fieldName)) {
+                return REGISTRY.get(getClassForBsonType(bsonReader.getCurrentBsonType())).decode(bsonReader,
+                        DecoderContext.builder().build());
+            }
+            bsonReader.skipValue();
+        }
+        bsonReader.readEndDocument();
+        return null;
+    }
+
+    private static boolean isCommandOk(final BsonValue okValue) {
         if (okValue == null) {
             return false;
         } else if (okValue.isBoolean()) {
@@ -113,6 +151,18 @@ final class ProtocolHelper {
         }
     }
 
+    static RequestMessage.EncodingMetadata encodeMessageWithMetadata(final RequestMessage message, final BsonOutput bsonOutput) {
+        try {
+            return message.encodeWithMetadata(bsonOutput);
+        } catch (RuntimeException e) {
+            bsonOutput.close();
+            throw e;
+        } catch (Error e) {
+            bsonOutput.close();
+            throw e;
+        }
+    }
+
     private static MongoException createSpecialException(final BsonDocument response, final ServerAddress serverAddress,
                                                          final String errorMessageFieldName) {
         if (ErrorCategory.fromErrorCode(getErrorCode(response)) == ErrorCategory.EXECUTION_TIMEOUT) {
@@ -144,6 +194,47 @@ final class ProtocolHelper {
             throw new WriteConcernException(result, serverAddress, createWriteResult(result));
         }
     }
+
+    static void sendCommandStartedEvent(final RequestMessage message, final String databaseName, final String commandName,
+                                        final BsonDocument command, final ConnectionDescription connectionDescription,
+                                        final CommandListener commandListener) {
+        try {
+            commandListener.commandStarted(new CommandStartedEvent(message.getId(), connectionDescription,
+                                                                   databaseName, commandName, command));
+        } catch (Exception e) {
+            if (PROTOCOL_EVENT_LOGGER.isWarnEnabled()) {
+                PROTOCOL_EVENT_LOGGER.warn(format("Exception thrown raising command started event to listener %s", commandListener), e);
+            }
+        }
+    }
+
+    static void sendCommandSucceededEvent(final RequestMessage message, final String commandName, final BsonDocument response,
+                                          final ConnectionDescription connectionDescription, final long startTimeNanos,
+                                          final CommandListener commandListener) {
+        try {
+            commandListener.commandSucceeded(new CommandSucceededEvent(message.getId(), connectionDescription,
+                                                                       commandName,
+                                                                       response, System.nanoTime() - startTimeNanos));
+        } catch (Exception e) {
+            if (PROTOCOL_EVENT_LOGGER.isWarnEnabled()) {
+                PROTOCOL_EVENT_LOGGER.warn(format("Exception thrown raising command succeeded event to listener %s", commandListener), e);
+            }
+        }
+    }
+
+    static void sendCommandFailedEvent(final RequestMessage message, final String commandName,
+                                       final ConnectionDescription connectionDescription, final long startTimeNanos,
+                                       final Throwable throwable, final CommandListener commandListener) {
+        try {
+            commandListener.commandFailed(new CommandFailedEvent(message.getId(), connectionDescription, commandName,
+                                                                 System.nanoTime() - startTimeNanos, throwable));
+        } catch (Exception e) {
+            if (PROTOCOL_EVENT_LOGGER.isWarnEnabled()) {
+                PROTOCOL_EVENT_LOGGER.warn(format("Exception thrown raising command failed event to listener %s", commandListener), e);
+            }
+        }
+    }
+
 
     private ProtocolHelper() {
     }

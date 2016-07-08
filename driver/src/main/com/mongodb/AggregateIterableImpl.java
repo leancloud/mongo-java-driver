@@ -17,6 +17,7 @@
 package com.mongodb;
 
 import com.mongodb.client.AggregateIterable;
+import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCursor;
 import com.mongodb.client.MongoIterable;
 import com.mongodb.client.model.FindOptions;
@@ -41,6 +42,7 @@ class AggregateIterableImpl<TDocument, TResult> implements AggregateIterable<TRe
     private final Class<TDocument> documentClass;
     private final Class<TResult> resultClass;
     private final ReadPreference readPreference;
+    private final ReadConcern readConcern;
     private final CodecRegistry codecRegistry;
     private final OperationExecutor executor;
     private final List<? extends Bson> pipeline;
@@ -49,15 +51,17 @@ class AggregateIterableImpl<TDocument, TResult> implements AggregateIterable<TRe
     private Integer batchSize;
     private long maxTimeMS;
     private Boolean useCursor;
+    private Boolean bypassDocumentValidation;
 
     AggregateIterableImpl(final MongoNamespace namespace, final Class<TDocument> documentClass, final Class<TResult> resultClass,
-                          final CodecRegistry codecRegistry, final ReadPreference readPreference, final OperationExecutor executor,
-                          final List<? extends Bson> pipeline) {
+                          final CodecRegistry codecRegistry, final ReadPreference readPreference, final ReadConcern readConcern,
+                          final OperationExecutor executor, final List<? extends Bson> pipeline) {
         this.namespace = notNull("namespace", namespace);
         this.documentClass = notNull("documentClass", documentClass);
         this.resultClass = notNull("resultClass", resultClass);
         this.codecRegistry = notNull("codecRegistry", codecRegistry);
         this.readPreference = notNull("readPreference", readPreference);
+        this.readConcern = notNull("readConcern", readConcern);
         this.executor = notNull("executor", executor);
         this.pipeline = notNull("pipeline", pipeline);
     }
@@ -84,6 +88,12 @@ class AggregateIterableImpl<TDocument, TResult> implements AggregateIterable<TRe
     @Override
     public AggregateIterable<TResult> useCursor(final Boolean useCursor) {
         this.useCursor = useCursor;
+        return this;
+    }
+
+    @Override
+    public AggregateIterable<TResult> bypassDocumentValidation(final Boolean bypassDocumentValidation) {
+        this.bypassDocumentValidation = bypassDocumentValidation;
         return this;
     }
 
@@ -120,19 +130,23 @@ class AggregateIterableImpl<TDocument, TResult> implements AggregateIterable<TRe
         if (outCollection != null) {
             AggregateToCollectionOperation operation = new AggregateToCollectionOperation(namespace, aggregateList)
                     .maxTime(maxTimeMS, MILLISECONDS)
-                    .allowDiskUse(allowDiskUse);
+                    .allowDiskUse(allowDiskUse)
+                    .bypassDocumentValidation(bypassDocumentValidation);
             executor.execute(operation);
-            return new FindIterableImpl<TDocument, TResult>(new MongoNamespace(namespace.getDatabaseName(),
-                                                                               outCollection.asString().getValue()),
-                                                            documentClass, resultClass, codecRegistry, readPreference, executor,
-                                                            new BsonDocument(),
-                    new FindOptions()).batchSize(batchSize);
+            FindIterable<TResult> findOperation = new FindIterableImpl<TDocument, TResult>(new MongoNamespace(namespace.getDatabaseName(),
+                    outCollection.asString().getValue()), documentClass, resultClass, codecRegistry, readPreference, readConcern, executor,
+                    new BsonDocument(), new FindOptions());
+            if (batchSize != null) {
+                findOperation.batchSize(batchSize);
+            }
+            return findOperation;
         } else {
             return new OperationIterable<TResult>(new AggregateOperation<TResult>(namespace, aggregateList, codecRegistry.get(resultClass))
                     .maxTime(maxTimeMS, MILLISECONDS)
                     .allowDiskUse(allowDiskUse)
                     .batchSize(batchSize)
-                    .useCursor(useCursor),
+                    .useCursor(useCursor)
+                    .readConcern(readConcern),
                     readPreference, executor);
         }
     }

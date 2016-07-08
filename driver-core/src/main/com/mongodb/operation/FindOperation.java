@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,34 +18,57 @@ package com.mongodb.operation;
 
 import com.mongodb.CursorType;
 import com.mongodb.ExplainVerbosity;
+import com.mongodb.MongoCommandException;
 import com.mongodb.MongoInternalException;
 import com.mongodb.MongoNamespace;
+import com.mongodb.MongoQueryException;
+import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
+import com.mongodb.ServerAddress;
 import com.mongodb.async.AsyncBatchCursor;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.binding.AsyncConnectionSource;
 import com.mongodb.binding.AsyncReadBinding;
+import com.mongodb.binding.AsyncSingleConnectionReadBinding;
 import com.mongodb.binding.ConnectionSource;
 import com.mongodb.binding.ReadBinding;
+import com.mongodb.binding.SingleConnectionReadBinding;
 import com.mongodb.connection.AsyncConnection;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.ConnectionDescription;
 import com.mongodb.connection.QueryResult;
+import com.mongodb.operation.OperationHelper.CallableWithConnectionAndSource;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
+import org.bson.BsonDocumentReader;
+import org.bson.BsonInt32;
 import org.bson.BsonInt64;
+import org.bson.BsonString;
+import org.bson.BsonValue;
 import org.bson.codecs.BsonDocumentCodec;
 import org.bson.codecs.Decoder;
+import org.bson.codecs.DecoderContext;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static com.mongodb.ReadPreference.primary;
+import static com.mongodb.assertions.Assertions.isTrueArgument;
 import static com.mongodb.assertions.Assertions.notNull;
 import static com.mongodb.connection.ServerType.SHARD_ROUTER;
 import static com.mongodb.internal.async.ErrorHandlingResultCallback.errorHandlingCallback;
+import static com.mongodb.operation.CommandOperationHelper.CommandTransformer;
+import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocol;
+import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocolAsync;
 import static com.mongodb.operation.OperationHelper.AsyncCallableWithConnectionAndSource;
+import static com.mongodb.operation.OperationHelper.LOGGER;
+import static com.mongodb.operation.OperationHelper.checkValidReadConcern;
+import static com.mongodb.operation.OperationHelper.cursorDocumentToQueryResult;
 import static com.mongodb.operation.OperationHelper.releasingCallback;
+import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionThreeDotTwo;
 import static com.mongodb.operation.OperationHelper.withConnection;
 
 /**
@@ -55,6 +78,8 @@ import static com.mongodb.operation.OperationHelper.withConnection;
  * @since 3.0
  */
 public class FindOperation<T> implements AsyncReadOperation<AsyncBatchCursor<T>>, ReadOperation<BatchCursor<T>> {
+    private static final String FIRST_BATCH = "firstBatch";
+
     private final MongoNamespace namespace;
     private final Decoder<T> decoder;
     private BsonDocument filter;
@@ -63,6 +88,7 @@ public class FindOperation<T> implements AsyncReadOperation<AsyncBatchCursor<T>>
     private BsonDocument modifiers;
     private BsonDocument projection;
     private long maxTimeMS;
+    private long maxAwaitTimeMS;
     private int skip;
     private BsonDocument sort;
     private CursorType cursorType = CursorType.NonTailable;
@@ -70,6 +96,7 @@ public class FindOperation<T> implements AsyncReadOperation<AsyncBatchCursor<T>>
     private boolean oplogReplay;
     private boolean noCursorTimeout;
     private boolean partial;
+    private ReadConcern readConcern = ReadConcern.DEFAULT;
 
     /**
      * Construct a new instance.
@@ -230,10 +257,49 @@ public class FindOperation<T> implements AsyncReadOperation<AsyncBatchCursor<T>>
      */
     public FindOperation<T> maxTime(final long maxTime, final TimeUnit timeUnit) {
         notNull("timeUnit", timeUnit);
+        isTrueArgument("maxTime >= 0", maxTime >= 0);
         this.maxTimeMS = TimeUnit.MILLISECONDS.convert(maxTime, timeUnit);
         return this;
     }
 
+    /**
+     * The maximum amount of time for the server to wait on new documents to satisfy a tailable cursor
+     * query. This only applies to a TAILABLE_AWAIT cursor. When the cursor is not a TAILABLE_AWAIT cursor,
+     * this option is ignored.
+     *
+     * On servers &gt;= 3.2, this option will be specified on the getMore command as "maxTimeMS". The default
+     * is no value: no "maxTimeMS" is sent to the server with the getMore command.
+     *
+     * On servers &lt; 3.2, this option is ignored, and indicates that the driver should respect the server's default value
+     *
+     * A zero value will be ignored.
+     *
+     * @param timeUnit the time unit to return the result in
+     * @return the maximum await execution time in the given time unit
+     * @since 3.2
+     * @mongodb.driver.manual reference/method/cursor.maxTimeMS/#cursor.maxTimeMS Max Time
+     */
+    public long getMaxAwaitTime(final TimeUnit timeUnit) {
+        notNull("timeUnit", timeUnit);
+        return timeUnit.convert(maxAwaitTimeMS, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Sets the maximum await execution time on the server for this operation.
+     *
+     * @param maxAwaitTime  the max await time.  A zero value will be ignored, and indicates that the driver should respect the server's
+     *                      default value
+     * @param timeUnit the time unit, which may not be null
+     * @return this
+     * @since 3.2
+     * @mongodb.driver.manual reference/method/cursor.maxTimeMS/#cursor.maxTimeMS Max Time
+     */
+    public FindOperation<T> maxAwaitTime(final long maxAwaitTime, final TimeUnit timeUnit) {
+        notNull("timeUnit", timeUnit);
+        isTrueArgument("maxAwaitTime >= 0", maxAwaitTime >= 0);
+        this.maxAwaitTimeMS = TimeUnit.MILLISECONDS.convert(maxAwaitTime, timeUnit);
+        return this;
+    }
     /**
      * Gets the number of documents to skip.  The default is 0.
      *
@@ -389,24 +455,60 @@ public class FindOperation<T> implements AsyncReadOperation<AsyncBatchCursor<T>>
         return this;
     }
 
+    /**
+     * Gets the read concern
+     *
+     * @return the read concern
+     * @since 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    public ReadConcern getReadConcern() {
+        return readConcern;
+    }
+
+    /**
+     * Sets the read concern
+     * @param readConcern the read concern
+     * @return this
+     * @since 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    public FindOperation<T> readConcern(final ReadConcern readConcern) {
+        this.readConcern = notNull("readConcern", readConcern);
+        return this;
+    }
+
     @Override
     public BatchCursor<T> execute(final ReadBinding binding) {
-        return withConnection(binding, new OperationHelper.CallableWithConnectionAndSource<BatchCursor<T>>() {
+        return withConnection(binding, new CallableWithConnectionAndSource<BatchCursor<T>>() {
             @Override
             public BatchCursor<T> call(final ConnectionSource source, final Connection connection) {
-                QueryResult<T> queryResult = connection.query(namespace,
-                                                              asDocument(connection.getDescription(), binding.getReadPreference()),
-                                                              projection,
-                                                              getNumberToReturn(),
-                                                              skip,
-                                                              isSlaveOk() || binding.getReadPreference().isSlaveOk(),
-                                                              isTailableCursor(),
-                                                              isAwaitData(),
-                                                              isNoCursorTimeout(),
-                                                              isPartial(),
-                                                              isOplogReplay(),
-                                                              decoder);
-                return new QueryBatchCursor<T>(queryResult, limit, batchSize, decoder, source, connection);
+                if (serverIsAtLeastVersionThreeDotTwo(connection.getDescription())) {
+                    try {
+                        return executeWrappedCommandProtocol(binding, namespace.getDatabaseName(),
+                                                             wrapInExplainIfNecessary(asCommandDocument()),
+                                                             CommandResultDocumentCodec.create(decoder, FIRST_BATCH),
+                                                             connection, transformer(source, connection));
+                    } catch (MongoCommandException e) {
+                        throw new MongoQueryException(e.getServerAddress(), e.getErrorCode(), e.getErrorMessage());
+                    }
+                } else {
+                    checkValidReadConcern(connection, readConcern);
+                    QueryResult<T> queryResult = connection.query(namespace,
+                                                                  asDocument(connection.getDescription(), binding.getReadPreference()),
+                                                                  projection,
+                                                                  skip,
+                                                                  limit,
+                                                                  batchSize,
+                                                                  isSlaveOk() || binding.getReadPreference().isSlaveOk(),
+                                                                  isTailableCursor(),
+                                                                  isAwaitData(),
+                                                                  isNoCursorTimeout(),
+                                                                  isPartial(),
+                                                                  isOplogReplay(),
+                                                                  decoder);
+                    return new QueryBatchCursor<T>(queryResult, limit, batchSize, getMaxTimeForCursor(), decoder, source, connection);
+                }
             }
         });
     }
@@ -416,27 +518,69 @@ public class FindOperation<T> implements AsyncReadOperation<AsyncBatchCursor<T>>
         withConnection(binding, new AsyncCallableWithConnectionAndSource() {
             @Override
             public void call(final AsyncConnectionSource source, final AsyncConnection connection, final Throwable t) {
+                SingleResultCallback<AsyncBatchCursor<T>> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 if (t != null) {
-                    errorHandlingCallback(callback).onResult(null, t);
+                    errHandlingCallback.onResult(null, t);
                 } else {
-                    final SingleResultCallback<AsyncBatchCursor<T>> wrappedCallback = releasingCallback(errorHandlingCallback(callback),
-                                                                                                        source, connection);
-                    connection.queryAsync(namespace, asDocument(connection.getDescription(), binding.getReadPreference()), projection,
-                                          getNumberToReturn(), skip, isSlaveOk() || binding.getReadPreference().isSlaveOk(),
-                                          isTailableCursor(), isAwaitData(), isNoCursorTimeout(), isPartial(), isOplogReplay(),
-                                          decoder, new SingleResultCallback<QueryResult<T>>() {
-                        @Override
-                        public void onResult(final QueryResult<T> result, final Throwable t) {
-                            if (t != null) {
-                                wrappedCallback.onResult(null, t);
-                            } else {
-                                wrappedCallback.onResult(new AsyncQueryBatchCursor<T>(result, limit, batchSize, decoder, source), null);
+                    if (serverIsAtLeastVersionThreeDotTwo(connection.getDescription())) {
+                        executeWrappedCommandProtocolAsync(binding, namespace.getDatabaseName(),
+                                                           wrapInExplainIfNecessary(asCommandDocument()),
+                                                           CommandResultDocumentCodec.create(decoder, FIRST_BATCH),
+                                                           connection, asyncTransformer(source, connection),
+                                                           releasingCallback(exceptionTransformingCallback(errHandlingCallback),
+                                                                             source, connection));
+                    } else {
+                        final SingleResultCallback<AsyncBatchCursor<T>> wrappedCallback = releasingCallback(errHandlingCallback,
+
+                                source, connection);
+                        checkValidReadConcern(source, connection, readConcern, new AsyncCallableWithConnectionAndSource() {
+                            @Override
+                            public void call(final AsyncConnectionSource source, final AsyncConnection connection, final Throwable t) {
+                                if (t != null) {
+                                    wrappedCallback.onResult(null, t);
+                                } else {
+                                    connection.queryAsync(namespace, asDocument(connection.getDescription(), binding.getReadPreference()),
+                                            projection, skip, limit, batchSize, isSlaveOk() || binding.getReadPreference().isSlaveOk(),
+                                            isTailableCursor(), isAwaitData(), isNoCursorTimeout(), isPartial(), isOplogReplay(), decoder,
+                                            new SingleResultCallback<QueryResult<T>>() {
+                                                @Override
+                                                public void onResult(final QueryResult<T> result, final Throwable t) {
+                                                    if (t != null) {
+                                                        wrappedCallback.onResult(null, t);
+                                                    } else {
+                                                        wrappedCallback.onResult(new AsyncQueryBatchCursor<T>(result, limit, batchSize,
+                                                                        getMaxTimeForCursor(),
+                                                                        decoder, source, connection), null);
+                                                    }
+                                                }
+                                            });
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 }
             }
         });
+    }
+
+    private static <T> SingleResultCallback<T> exceptionTransformingCallback(final SingleResultCallback<T> callback) {
+        return new SingleResultCallback<T>() {
+            @Override
+            public void onResult(final T result, final Throwable t) {
+                if (t != null) {
+                    if (t instanceof MongoCommandException) {
+                        MongoCommandException commandException = (MongoCommandException) t;
+                        callback.onResult(result, new MongoQueryException(commandException.getServerAddress(),
+                                                                          commandException.getErrorCode(),
+                                                                          commandException.getErrorMessage()));
+                    } else {
+                        callback.onResult(result, t);
+                    }
+                } else {
+                    callback.onResult(result, null);
+                }
+            }
+        };
     }
 
 
@@ -447,11 +591,38 @@ public class FindOperation<T> implements AsyncReadOperation<AsyncBatchCursor<T>>
      * @return a read operation that when executed will explain this operation
      */
     public ReadOperation<BsonDocument> asExplainableOperation(final ExplainVerbosity explainVerbosity) {
-        final FindOperation<BsonDocument> explainableFindOperation = createExplainableQueryOperation();
+        notNull("explainVerbosity", explainVerbosity);
         return new ReadOperation<BsonDocument>() {
             @Override
             public BsonDocument execute(final ReadBinding binding) {
-                return explainableFindOperation.execute(binding).next().iterator().next();
+                return withConnection(binding, new CallableWithConnectionAndSource<BsonDocument>() {
+                    @Override
+                    public BsonDocument call(final ConnectionSource connectionSource, final Connection connection) {
+                        ReadBinding singleConnectionBinding = new SingleConnectionReadBinding(binding.getReadPreference(),
+                                                                                              connectionSource.getServerDescription(),
+                                                                                              connection);
+                        try {
+                            if (serverIsAtLeastVersionThreeDotTwo(connection.getDescription())) {
+                                try {
+                                    return new CommandReadOperation<BsonDocument>(getNamespace().getDatabaseName(),
+                                                                                  new BsonDocument("explain", asCommandDocument()),
+                                                                                  new BsonDocumentCodec()).execute(singleConnectionBinding);
+                                } catch (MongoCommandException e) {
+                                    throw new MongoQueryException(e.getServerAddress(), e.getErrorCode(), e.getErrorMessage());
+                                }
+                            } else {
+                                BatchCursor<BsonDocument> cursor = createExplainableQueryOperation().execute(singleConnectionBinding);
+                                try {
+                                    return cursor.next().iterator().next();
+                                } finally {
+                                    cursor.close();
+                                }
+                            }
+                        } finally {
+                            singleConnectionBinding.release();
+                        }
+                    }
+                });
             }
         };
     }
@@ -463,28 +634,34 @@ public class FindOperation<T> implements AsyncReadOperation<AsyncBatchCursor<T>>
      * @return a read operation that when executed will explain this operation
      */
     public AsyncReadOperation<BsonDocument> asExplainableOperationAsync(final ExplainVerbosity explainVerbosity) {
-        final FindOperation<BsonDocument> explainableFindOperation = createExplainableQueryOperation();
+        notNull("explainVerbosity", explainVerbosity);
         return new AsyncReadOperation<BsonDocument>() {
             @Override
             public void executeAsync(final AsyncReadBinding binding, final SingleResultCallback<BsonDocument> callback) {
-                explainableFindOperation.executeAsync(binding, new SingleResultCallback<AsyncBatchCursor<BsonDocument>>() {
+                withConnection(binding, new AsyncCallableWithConnectionAndSource() {
                     @Override
-                    public void onResult(final AsyncBatchCursor<BsonDocument> result, final Throwable t) {
+                    public void call(final AsyncConnectionSource connectionSource, final AsyncConnection connection, final Throwable t) {
+                        SingleResultCallback<BsonDocument> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                         if (t != null) {
-                            callback.onResult(null, t);
+                            errHandlingCallback.onResult(null, t);
                         } else {
-                            result.next(new SingleResultCallback<List<BsonDocument>>() {
-                                @Override
-                                public void onResult(final List<BsonDocument> result, final Throwable t) {
-                                    if (t != null) {
-                                        callback.onResult(null, t);
-                                    } else if (result.size() == 0) {
-                                        callback.onResult(null, new MongoInternalException("Unexpected explain result size"));
-                                    } else {
-                                        callback.onResult(result.get(0), null);
-                                    }
-                                }
-                            });
+                            AsyncReadBinding singleConnectionReadBinding =
+                            new AsyncSingleConnectionReadBinding(binding.getReadPreference(), connectionSource.getServerDescription(),
+                                                                 connection);
+
+                            if (serverIsAtLeastVersionThreeDotTwo(connection.getDescription())) {
+                                new CommandReadOperation<BsonDocument>(namespace.getDatabaseName(),
+                                                                       new BsonDocument("explain", asCommandDocument()),
+                                                                       new BsonDocumentCodec())
+                                .executeAsync(singleConnectionReadBinding,
+                                              releasingCallback(exceptionTransformingCallback(errHandlingCallback),
+                                                                singleConnectionReadBinding, connectionSource, connection));
+                            } else {
+                                createExplainableQueryOperation()
+                                .executeAsync(singleConnectionReadBinding,
+                                              releasingCallback(new ExplainResultCallback(errHandlingCallback),
+                                                      singleConnectionReadBinding, connectionSource, connection));
+                            }
                         }
                     }
                 });
@@ -502,42 +679,20 @@ public class FindOperation<T> implements AsyncReadOperation<AsyncBatchCursor<T>>
         explainModifiers.append("$explain", BsonBoolean.TRUE);
 
         return explainFindOperation.filter(filter)
-                             .projection(projection)
-                             .sort(sort)
-                             .skip(skip)
-                             .limit(Math.abs(limit) * -1)
-                             .modifiers(explainModifiers);
+               .projection(projection)
+               .sort(sort)
+               .skip(skip)
+               .limit(Math.abs(limit) * -1)
+               .modifiers(explainModifiers);
 
-    }
-
-    /**
-     * Gets the limit of the number of documents in the first OP_REPLY response to the query.
-     *
-     * <p>A value of zero tells the server to use the default size. A negative value tells the server to return no more than that number
-     * and immediately close the cursor.  Otherwise, the server will return no more than that number and return a cursorId to allow the
-     * rest of the documents to be fetched, if it turns out there are more documents.</p>
-     *
-     * <p>The value returned by this method is based on the limit and the batch size, both of which can be positive, negative, or zero.</p>
-     *
-     * @return the value for numberToReturn in the OP_QUERY wire protocol message.
-     * @mongodb.driver.manual ../meta-driver/latest/legacy/mongodb-wire-protocol/#op-query OP_QUERY
-     */
-    private int getNumberToReturn() {
-        if (limit < 0) {
-            return limit;
-        } else if (limit == 0) {
-            return batchSize;
-        } else if (batchSize == 0) {
-            return limit;
-        } else if (limit < Math.abs(batchSize)) {
-            return limit;
-        } else {
-            return batchSize;
-        }
     }
 
     private BsonDocument asDocument(final ConnectionDescription connectionDescription, final ReadPreference readPreference) {
         BsonDocument document = new BsonDocument();
+
+        if (modifiers != null) {
+            document.putAll(modifiers);
+        }
 
         if (sort != null) {
             document.put("$orderby", sort);
@@ -551,17 +706,118 @@ public class FindOperation<T> implements AsyncReadOperation<AsyncBatchCursor<T>>
             document.put("$readPreference", readPreference.toDocument());
         }
 
-        if (modifiers != null) {
-            document.putAll(modifiers);
-        }
-
         if (document.isEmpty()) {
             document = filter != null ? filter : new BsonDocument();
-        } else {
-            document.put("$query", filter != null ? filter : new BsonDocument());
+        } else if (filter != null) {
+            document.put("$query", filter);
+        } else if (!document.containsKey("$query")) {
+            document.put("$query", new BsonDocument());
         }
 
         return document;
+    }
+
+    private static final Map<String, String> META_OPERATOR_TO_COMMAND_FIELD_MAP = new HashMap<String, String>();
+
+    static {
+        META_OPERATOR_TO_COMMAND_FIELD_MAP.put("$query", "filter");
+        META_OPERATOR_TO_COMMAND_FIELD_MAP.put("$orderby", "sort");
+        META_OPERATOR_TO_COMMAND_FIELD_MAP.put("$hint", "hint");
+        META_OPERATOR_TO_COMMAND_FIELD_MAP.put("$comment", "comment");
+        META_OPERATOR_TO_COMMAND_FIELD_MAP.put("$maxScan", "maxScan");
+        META_OPERATOR_TO_COMMAND_FIELD_MAP.put("$maxTimeMS", "maxTimeMS");
+        META_OPERATOR_TO_COMMAND_FIELD_MAP.put("$max", "max");
+        META_OPERATOR_TO_COMMAND_FIELD_MAP.put("$min", "min");
+        META_OPERATOR_TO_COMMAND_FIELD_MAP.put("$returnKey", "returnKey");
+        META_OPERATOR_TO_COMMAND_FIELD_MAP.put("$showDiskLoc", "showRecordId");
+        META_OPERATOR_TO_COMMAND_FIELD_MAP.put("$snapshot", "snapshot");
+    }
+
+    private BsonDocument asCommandDocument() {
+        BsonDocument document = new BsonDocument("find", new BsonString(namespace.getCollectionName()));
+
+        if (modifiers != null) {
+            for (Map.Entry<String, BsonValue> cur : modifiers.entrySet()) {
+                String commandFieldName = META_OPERATOR_TO_COMMAND_FIELD_MAP.get(cur.getKey());
+                if (commandFieldName != null) {
+                    document.append(commandFieldName, cur.getValue());
+                }
+            }
+        }
+
+        if (filter != null) {
+            document.put("filter", filter);
+        }
+
+        if (sort != null) {
+            document.put("sort", sort);
+        }
+
+        if (projection != null) {
+            document.put("projection", projection);
+        }
+
+        if (skip > 0) {
+            document.put("skip", new BsonInt32(skip));
+        }
+
+        if (limit != 0) {
+            document.put("limit", new BsonInt32(Math.abs(limit)));
+        }
+
+        if (limit >= 0) {
+            if (batchSize < 0 && Math.abs(batchSize) < limit) {
+                document.put("limit", new BsonInt32(Math.abs(batchSize)));
+            } else if (batchSize != 0) {
+                document.put("batchSize", new BsonInt32(Math.abs(batchSize)));
+            }
+        }
+
+        if (limit < 0 || batchSize < 0) {
+            document.put("singleBatch", BsonBoolean.TRUE);
+        }
+
+        if (maxTimeMS > 0) {
+            document.put("maxTimeMS", new BsonInt64(maxTimeMS));
+        }
+
+        if (isTailableCursor()) {
+            document.put("tailable", BsonBoolean.TRUE);
+        }
+
+        if (isAwaitData()) {
+            document.put("awaitData", BsonBoolean.TRUE);
+        }
+
+        if (oplogReplay) {
+            document.put("oplogReplay", BsonBoolean.TRUE);
+        }
+
+        if (noCursorTimeout) {
+            document.put("noCursorTimeout", BsonBoolean.TRUE);
+        }
+
+        if (partial) {
+            document.put("allowPartialResults", BsonBoolean.TRUE);
+        }
+
+        if (!readConcern.isServerDefault()) {
+            document.put("readConcern", readConcern.asDocument());
+        }
+
+        return document;
+    }
+
+    private BsonDocument wrapInExplainIfNecessary(final BsonDocument findCommandDocument) {
+        if (isExplain()) {
+            return new BsonDocument("explain", findCommandDocument);
+        } else {
+            return findCommandDocument;
+        }
+    }
+
+    private boolean isExplain() {
+        return modifiers != null && modifiers.get("$explain", BsonBoolean.FALSE).equals(BsonBoolean.TRUE);
     }
 
     private boolean isTailableCursor() {
@@ -570,5 +826,71 @@ public class FindOperation<T> implements AsyncReadOperation<AsyncBatchCursor<T>>
 
     private boolean isAwaitData() {
         return cursorType == CursorType.TailableAwait;
+    }
+
+    private CommandTransformer<BsonDocument, BatchCursor<T>> transformer(final ConnectionSource source,
+                                                                         final Connection connection) {
+        return new CommandTransformer<BsonDocument, BatchCursor<T>>() {
+            @Override
+            public BatchCursor<T> apply(final BsonDocument result, final ServerAddress serverAddress) {
+                QueryResult<T> queryResult = documentToQueryResult(result, serverAddress);
+                return new QueryBatchCursor<T>(queryResult, limit, batchSize, getMaxTimeForCursor(), decoder, source, connection);
+            }
+        };
+    }
+
+    private long getMaxTimeForCursor() {
+        return cursorType == CursorType.TailableAwait ? maxAwaitTimeMS : 0;
+    }
+
+    private CommandTransformer<BsonDocument, AsyncBatchCursor<T>> asyncTransformer(final AsyncConnectionSource source,
+                                                                                   final AsyncConnection connection) {
+        return new CommandTransformer<BsonDocument, AsyncBatchCursor<T>>() {
+            @Override
+            public AsyncBatchCursor<T> apply(final BsonDocument result, final ServerAddress serverAddress) {
+                QueryResult<T> queryResult = documentToQueryResult(result, serverAddress);
+                return new AsyncQueryBatchCursor<T>(queryResult, limit, batchSize, getMaxTimeForCursor(), decoder, source, connection);
+            }
+        };
+    }
+
+    private QueryResult<T> documentToQueryResult(final BsonDocument result, final ServerAddress serverAddress) {
+        QueryResult<T> queryResult;
+        if (isExplain()) {
+            T decodedDocument = decoder.decode(new BsonDocumentReader(result), DecoderContext.builder().build());
+            queryResult = new QueryResult<T>(getNamespace(), Collections.singletonList(decodedDocument), 0, serverAddress);
+        } else {
+            queryResult = cursorDocumentToQueryResult(result.getDocument("cursor"), serverAddress);
+        }
+        return queryResult;
+    }
+
+    private static class ExplainResultCallback implements SingleResultCallback<AsyncBatchCursor<BsonDocument>> {
+        private final SingleResultCallback<BsonDocument> callback;
+
+        public ExplainResultCallback(final SingleResultCallback<BsonDocument> callback) {
+            this.callback = callback;
+        }
+
+        @Override
+        public void onResult(final AsyncBatchCursor<BsonDocument> cursor, final Throwable t) {
+            if (t != null) {
+                callback.onResult(null, t);
+            } else {
+                cursor.next(new SingleResultCallback<List<BsonDocument>>() {
+                    @Override
+                    public void onResult(final List<BsonDocument> result, final Throwable t) {
+                        cursor.close();
+                        if (t != null) {
+                            callback.onResult(null, t);
+                        } else if (result == null || result.size() == 0) {
+                            callback.onResult(null, new MongoInternalException("Expected explain result"));
+                        } else {
+                            callback.onResult(result.get(0), null);
+                        }
+                    }
+                });
+            }
+        }
     }
 }

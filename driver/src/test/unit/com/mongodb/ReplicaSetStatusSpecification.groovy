@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 - 2014 MongoDB, Inc.
+ * Copyright (c) 2008-2014 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import com.mongodb.connection.ServerDescription
 import spock.lang.Specification
 import spock.lang.Subject
 
+@SuppressWarnings('deprecation')
 class ReplicaSetStatusSpecification extends Specification {
     private final ClusterDescription clusterDescription = Mock();
     private final Cluster cluster = Mock();

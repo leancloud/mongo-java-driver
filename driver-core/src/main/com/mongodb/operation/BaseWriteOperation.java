@@ -45,6 +45,9 @@ import static com.mongodb.bulk.WriteRequest.Type.UPDATE;
 import static com.mongodb.internal.async.ErrorHandlingResultCallback.errorHandlingCallback;
 import static com.mongodb.operation.OperationHelper.AsyncCallableWithConnection;
 import static com.mongodb.operation.OperationHelper.CallableWithConnection;
+import static com.mongodb.operation.OperationHelper.LOGGER;
+import static com.mongodb.operation.OperationHelper.bypassDocumentValidationNotSupported;
+import static com.mongodb.operation.OperationHelper.getBypassDocumentValidationException;
 import static com.mongodb.operation.OperationHelper.releasingCallback;
 import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionTwoDotSix;
 import static com.mongodb.operation.OperationHelper.withConnection;
@@ -60,6 +63,7 @@ public abstract class BaseWriteOperation implements AsyncWriteOperation<WriteCon
     private final WriteConcern writeConcern;
     private final MongoNamespace namespace;
     private final boolean ordered;
+    private Boolean bypassDocumentValidation;
 
     /**
      * Construct an instance
@@ -101,12 +105,39 @@ public abstract class BaseWriteOperation implements AsyncWriteOperation<WriteCon
         return ordered;
     }
 
+    /**
+     * Gets the the bypass document level validation flag
+     *
+     * @return the bypass document level validation flag
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     */
+    public Boolean getBypassDocumentValidation() {
+        return bypassDocumentValidation;
+    }
+
+    /**
+     * Sets the bypass document level validation flag.
+     *
+     * @param bypassDocumentValidation If true, allows the write to opt-out of document level validation.
+     * @return this
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     */
+    public BaseWriteOperation bypassDocumentValidation(final Boolean bypassDocumentValidation) {
+        this.bypassDocumentValidation = bypassDocumentValidation;
+        return this;
+    }
+
     @Override
     public WriteConcernResult execute(final WriteBinding binding) {
         return withConnection(binding, new CallableWithConnection<WriteConcernResult>() {
             @Override
             public WriteConcernResult call(final Connection connection) {
                 try {
+                    if (bypassDocumentValidationNotSupported(bypassDocumentValidation, writeConcern, connection.getDescription())) {
+                        throw getBypassDocumentValidationException();
+                    }
                     if (writeConcern.isAcknowledged() && serverIsAtLeastVersionTwoDotSix(connection.getDescription())) {
                         return translateBulkWriteResult(executeCommandProtocol(connection));
                     } else {
@@ -124,11 +155,13 @@ public abstract class BaseWriteOperation implements AsyncWriteOperation<WriteCon
         withConnection(binding, new AsyncCallableWithConnection() {
             @Override
             public void call(final AsyncConnection connection, final Throwable t) {
+                SingleResultCallback<WriteConcernResult> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 if (t != null) {
-                    errorHandlingCallback(callback).onResult(null, t);
+                    errHandlingCallback.onResult(null, t);
+                } else if (bypassDocumentValidationNotSupported(bypassDocumentValidation, writeConcern, connection.getDescription())) {
+                    releasingCallback(errHandlingCallback, connection).onResult(null, getBypassDocumentValidationException());
                 } else {
-                    final SingleResultCallback<WriteConcernResult> wrappedCallback = releasingCallback(errorHandlingCallback(callback),
-                                                                                                       connection);
+                    final SingleResultCallback<WriteConcernResult> wrappedCallback = releasingCallback(errHandlingCallback, connection);
                     if (writeConcern.isAcknowledged() && serverIsAtLeastVersionTwoDotSix(connection.getDescription())) {
                         executeCommandProtocolAsync(connection, new SingleResultCallback<BulkWriteResult>() {
                             @Override

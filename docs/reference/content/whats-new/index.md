@@ -7,19 +7,19 @@ title = "What's New"
   pre = "<i class='fa fa-cog'></i>"
 +++
 
-# What's New in 3.0
+# What's New in 3.3
 
-Key features of the 3.0 driver include:
+New features of the 3.3 driver include:
 
-- A generic [`MongoCollection`]({{< apiref "com/mongodb/client/MongoCollection" >}}) interface that complies with a new cross-driver 
-[CRUD specification](https://github.com/mongodb/specifications/blob/master/source/crud/crud.rst).
-- A new [asynchronous API](https://github.com/mongodb/mongo-java-driver/tree/master/driver-async) that can leverage either 
-[Netty](http://netty.io/) or Java 7's 
-[AsynchronousSocketChannel](http://docs.oracle .com/javase/7/docs/api/java/nio/channels/AsynchronousSocketChannel.html)
-- A new [Codec]({{< ref "bson/codecs.md" >}}) infrastructure that you can use to build high-performance
- encoders and decoders without requiring an intermediate Map instance.
-- A new core driver on top of which you can build alternative or experimental driver APIs
+- [Cluster Monitoring]({{<ref "driver/reference/management/monitoring.md#cluster-monitoring">}}) in the synchronous and asynchronous
+drivers
+- [Command Monitoring]({{<ref "driver/reference/management/monitoring.md#command-monitoring">}}) in the asynchronous driver
+(support in the synchronous driver was added in a previous release)
+- Additional query parameters in the [connection string]({{<ref "driver/reference/connecting/connection-settings.md#connection-string">}})
+- [GridFS]({{<ref "driver-async/reference/gridfs/index.md">}}) in the asynchronous driver
+- Additional configuration options for [GSSAPI authentication]({{<ref "driver/reference/connecting/authenticating.md#gssapi">}}).
+- [JNDI]({{<ref "driver/reference/connecting/jndi.md">}}) ObjectFactory implementation
 
 ## Upgrading
 
-See the [upgrading guide]({{<ref "whats-new/upgrading.md">}}) on how to upgrade to 3.0
+See the [upgrading guide]({{<ref "whats-new/upgrading.md">}}) on how to upgrade to 3.3.

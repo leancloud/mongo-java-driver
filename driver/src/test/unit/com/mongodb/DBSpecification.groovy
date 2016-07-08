@@ -16,15 +16,38 @@
 
 package com.mongodb
 
+import com.mongodb.client.model.ValidationAction
+import com.mongodb.client.model.ValidationLevel
 import com.mongodb.operation.CreateCollectionOperation
 import org.bson.BsonDocument
 import org.bson.BsonDouble
 import spock.lang.Specification
 
 import static com.mongodb.CustomMatchers.isTheSameAs
+import static com.mongodb.Fixture.getMongoClient
 import static spock.util.matcher.HamcrestSupport.expect
 
 class DBSpecification extends Specification {
+
+    def 'should get and set read concern'() {
+        when:
+        def db = new DB(getMongoClient(), 'test', new TestOperationExecutor([]))
+
+        then:
+        db.readConcern == ReadConcern.DEFAULT
+
+        when:
+        db.setReadConcern(ReadConcern.MAJORITY)
+
+        then:
+        db.readConcern == ReadConcern.MAJORITY
+
+        when:
+        db.setReadConcern(null)
+
+        then:
+        db.readConcern == ReadConcern.DEFAULT
+    }
 
     def 'should execute CreateCollectionOperation'() {
         given:
@@ -32,25 +55,40 @@ class DBSpecification extends Specification {
         mongo.mongoClientOptions >> MongoClientOptions.builder().build()
         def executor = new TestOperationExecutor([1L, 2L, 3L])
         def db = new DB(mongo, 'test', executor)
+
+        when:
+        db.createCollection('ctest', new BasicDBObject())
+
+        then:
+        def operation = executor.getWriteOperation() as CreateCollectionOperation
+        expect operation, isTheSameAs(new CreateCollectionOperation('test', 'ctest'))
+
+        when:
         def options = new BasicDBObject()
                 .append('size', 100000)
                 .append('max', 2000)
                 .append('capped', true)
                 .append('autoIndexId', true)
-                .append('storageEngine', new BasicDBObject('wiredTiger', new BasicDBObject()))
+                .append('storageEngine', BasicDBObject.parse('{ wiredTiger: {}}'))
+                .append('indexOptionDefaults', BasicDBObject.parse('{storageEngine: { mmapv1: {}}}'))
+                .append('validator', BasicDBObject.parse('{level : { $gte: 10 } }'))
+                .append('validationLevel', ValidationLevel.MODERATE.getValue())
+                .append('validationAction', ValidationAction.WARN.getValue())
 
-        when:
         db.createCollection('ctest', options)
+        operation = executor.getWriteOperation() as CreateCollectionOperation
 
         then:
-        def operation = executor.getWriteOperation() as CreateCollectionOperation
-        operation.storageEngineOptions == new BsonDocument('wiredTiger', new BsonDocument())
         expect operation, isTheSameAs(new CreateCollectionOperation('test', 'ctest')
                                               .sizeInBytes(100000)
                                               .maxDocuments(2000)
                                               .capped(true)
                                               .autoIndex(true)
-                                              .storageEngineOptions(new BsonDocument('wiredTiger', new BsonDocument())))
+                                              .storageEngineOptions(BsonDocument.parse('{ wiredTiger: {}}'))
+                                              .indexOptionDefaults(BsonDocument.parse('{storageEngine: { mmapv1: {}}}'))
+                                              .validator(BsonDocument.parse('{level : { $gte: 10 } }'))
+                                              .validationLevel(ValidationLevel.MODERATE)
+                                              .validationAction(ValidationAction.WARN))
     }
 
 

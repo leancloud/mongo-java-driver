@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,15 @@
 
 package com.mongodb.operation;
 
-import com.mongodb.Function;
 import com.mongodb.MongoNamespace;
+import com.mongodb.ServerAddress;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.binding.AsyncReadBinding;
 import com.mongodb.binding.ReadBinding;
 import com.mongodb.connection.AsyncConnection;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.QueryResult;
+import com.mongodb.operation.CommandOperationHelper.CommandTransformer;
 import org.bson.BsonDocument;
 import org.bson.BsonString;
 import org.bson.codecs.BsonDocumentCodec;
@@ -34,6 +35,7 @@ import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommand
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocolAsync;
 import static com.mongodb.operation.OperationHelper.AsyncCallableWithConnection;
 import static com.mongodb.operation.OperationHelper.CallableWithConnection;
+import static com.mongodb.operation.OperationHelper.LOGGER;
 import static com.mongodb.operation.OperationHelper.releasingCallback;
 import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionTwoDotSix;
 import static com.mongodb.operation.OperationHelper.withConnection;
@@ -64,14 +66,14 @@ public class UserExistsOperation implements AsyncReadOperation<Boolean>, ReadOpe
             @Override
             public Boolean call(final Connection connection) {
                 if (serverIsAtLeastVersionTwoDotSix(connection.getDescription())) {
-                    return executeWrappedCommandProtocol(databaseName, getCommand(), connection, binding.getReadPreference(),
-                                                         transformer());
+                    return executeWrappedCommandProtocol(binding, databaseName, getCommand(), connection, transformer());
                 } else {
                     return transformQueryResult().apply(connection.query(new MongoNamespace(databaseName, "system.users"),
-                                                                         new BsonDocument("user", new BsonString(userName)), null, 1, 0,
+                                                                         new BsonDocument("user", new BsonString(userName)), null, 0, 1, 0,
                                                                          binding.getReadPreference().isSlaveOk(), false,
                                                                          false, false, false, false,
-                                                                         new BsonDocumentCodec()));
+                                                                         new BsonDocumentCodec()),
+                                                        connection.getDescription().getServerAddress());
                 }
             }
         });
@@ -82,15 +84,17 @@ public class UserExistsOperation implements AsyncReadOperation<Boolean>, ReadOpe
         withConnection(binding, new AsyncCallableWithConnection() {
             @Override
             public void call(final AsyncConnection connection, final Throwable t) {
+                SingleResultCallback<Boolean> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 if (t != null) {
-                    errorHandlingCallback(callback).onResult(null, t);
+                    errHandlingCallback.onResult(null, t);
                 } else {
-                    final SingleResultCallback<Boolean> wrappedCallback = releasingCallback(errorHandlingCallback(callback), connection);
+                    final SingleResultCallback<Boolean> wrappedCallback = releasingCallback(errHandlingCallback, connection);
                     if (serverIsAtLeastVersionTwoDotSix(connection.getDescription())) {
-                        executeWrappedCommandProtocolAsync(databaseName, getCommand(), connection, transformer(), wrappedCallback);
+                        executeWrappedCommandProtocolAsync(binding, databaseName, getCommand(), new BsonDocumentCodec(), connection,
+                                transformer(), wrappedCallback);
                     } else {
                         connection.queryAsync(new MongoNamespace(databaseName, "system.users"),
-                                              new BsonDocument("user", new BsonString(userName)), null, 1, 0,
+                                              new BsonDocument("user", new BsonString(userName)), null, 0, 1, 0,
                                               binding.getReadPreference().isSlaveOk(), false,
                                               false, false, false, false,
                                               new BsonDocumentCodec(),
@@ -101,7 +105,10 @@ public class UserExistsOperation implements AsyncReadOperation<Boolean>, ReadOpe
                                      wrappedCallback.onResult(null, t);
                                  } else {
                                      try {
-                                         wrappedCallback.onResult(transformQueryResult().apply(result), null);
+                                         wrappedCallback.onResult(transformQueryResult().apply(result,
+                                                                                               connection.getDescription()
+                                                                                               .getServerAddress()),
+                                                                  null);
                                      } catch (Throwable tr) {
                                          wrappedCallback.onResult(null, tr);
                                      }
@@ -114,19 +121,19 @@ public class UserExistsOperation implements AsyncReadOperation<Boolean>, ReadOpe
         });
     }
 
-    private Function<BsonDocument, Boolean> transformer() {
-        return new Function<BsonDocument, Boolean>() {
+    private CommandTransformer<BsonDocument, Boolean> transformer() {
+        return new CommandTransformer<BsonDocument, Boolean>() {
             @Override
-            public Boolean apply(final BsonDocument result) {
+            public Boolean apply(final BsonDocument result, final ServerAddress serverAddress) {
                 return result.get("users").isArray() && !result.getArray("users").isEmpty();
             }
         };
     }
 
-    private Function<QueryResult<BsonDocument>, Boolean> transformQueryResult() {
-        return new Function<QueryResult<BsonDocument>, Boolean>() {
+    private CommandTransformer<QueryResult<BsonDocument>, Boolean> transformQueryResult() {
+        return new CommandTransformer<QueryResult<BsonDocument>, Boolean>() {
             @Override
-            public Boolean apply(final QueryResult<BsonDocument> queryResult) {
+            public Boolean apply(final QueryResult<BsonDocument> queryResult, final ServerAddress serverAddress) {
                 return !queryResult.getResults().isEmpty();
             }
         };

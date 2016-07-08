@@ -18,14 +18,14 @@ package com.mongodb.connection
 
 import com.mongodb.ConnectionString
 import com.mongodb.ServerAddress
-import com.mongodb.selector.PrimaryServerSelector
+import com.mongodb.selector.WritableServerSelector
 import spock.lang.Specification
 
 import java.util.concurrent.TimeUnit
 
 class ClusterSettingsSpecification extends Specification {
     def hosts = [new ServerAddress('localhost'), new ServerAddress('localhost', 30000)]
-    def serverSelector = new PrimaryServerSelector()
+    def serverSelector = new WritableServerSelector()
 
     def 'should set all default values'() {
         when:
@@ -41,28 +41,36 @@ class ClusterSettingsSpecification extends Specification {
         settings.serverSelector == null
         settings.getServerSelectionTimeout(TimeUnit.SECONDS) == 30
         settings.maxWaitQueueSize == 500
+        settings.clusterListeners == []
     }
 
     def 'should set all properties'() {
         when:
+        def listenerOne = new NoOpClusterListener()
+        def listenerTwo = new NoOpClusterListener()
         def settings = ClusterSettings.builder()
                                       .hosts(hosts)
                                       .mode(ClusterConnectionMode.MULTIPLE)
+                                      .description('my cluster')
                                       .requiredClusterType(ClusterType.REPLICA_SET)
                                       .requiredReplicaSetName('foo')
                                       .serverSelector(serverSelector)
                                       .serverSelectionTimeout(1, TimeUnit.SECONDS)
+                                      .addClusterListener(listenerOne)
+                                      .addClusterListener(listenerTwo)
                                       .maxWaitQueueSize(100)
                                       .build();
 
         then:
         settings.hosts == hosts
+        settings.description == 'my cluster'
         settings.mode == ClusterConnectionMode.MULTIPLE
         settings.requiredClusterType == ClusterType.REPLICA_SET
         settings.requiredReplicaSetName == 'foo'
         settings.serverSelector == serverSelector
         settings.getServerSelectionTimeout(TimeUnit.MILLISECONDS) == 1000
         settings.maxWaitQueueSize == 100
+        settings.clusterListeners == [listenerOne, listenerTwo]
     }
 
     def 'when connection string is applied to builder, all properties should be set'() {
@@ -130,6 +138,14 @@ class ClusterSettingsSpecification extends Specification {
 
         then:
         settings.maxWaitQueueSize == 150
+
+        when:
+        settings = ClusterSettings.builder().applyConnectionString(new ConnectionString('mongodb://example.com:27018/?' +
+                'serverSelectionTimeoutMS=50000'))
+                .build()
+
+        then:
+        settings.getServerSelectionTimeout(TimeUnit.MILLISECONDS) == 50000
     }
 
     def 'when cluster type is unknown and replica set name is specified, should set cluster type to ReplicaSet'() {
@@ -286,6 +302,25 @@ class ClusterSettingsSpecification extends Specification {
 
         then:
         settings.getHosts() == [new ServerAddress('server1'), new ServerAddress('server2')]
+    }
+
+    def 'list of cluster listeners should be unmodifiable'() {
+        given:
+        def settings = ClusterSettings.builder().hosts(hosts).build()
+
+        when:
+        settings.clusterListeners.add(new NoOpClusterListener())
+
+        then:
+        thrown(UnsupportedOperationException)
+    }
+
+    def 'cluster listener should not be null'() {
+       when:
+       ClusterSettings.builder().addClusterListener(null)
+
+       then:
+       thrown(IllegalArgumentException)
     }
 
     static class ServerAddressSubclass extends ServerAddress {

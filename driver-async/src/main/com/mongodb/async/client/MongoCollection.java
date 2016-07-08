@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package com.mongodb.async.client;
 
 import com.mongodb.MongoNamespace;
+import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
 import com.mongodb.WriteConcern;
 import com.mongodb.annotations.ThreadSafe;
@@ -30,6 +31,7 @@ import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.IndexModel;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.InsertManyOptions;
+import com.mongodb.client.model.InsertOneOptions;
 import com.mongodb.client.model.RenameCollectionOptions;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.model.WriteModel;
@@ -43,8 +45,13 @@ import java.util.List;
 
 /**
  * The MongoCollection interface.
- * <p>
- Note: Additions to this interface will not be considered to break binary compatibility.
+ *
+ * <p>Note: Additions to this interface will not be considered to break binary compatibility.</p>
+ *
+ * <p>MongoCollection is generic allowing for different types to represent documents. Any custom classes must have a
+ * {@link org.bson.codecs.Codec} registered in the {@link CodecRegistry}. The default {@code CodecRegistry} includes built-in support for:
+ * {@link org.bson.BsonDocument} and {@link Document}.
+ * </p>
  *
  * @param <TDocument> The type that this collection will encode documents from and decode documents to.
  * @since 3.0
@@ -88,6 +95,16 @@ public interface MongoCollection<TDocument> {
     WriteConcern getWriteConcern();
 
     /**
+     * Get the read concern for the MongoCollection.
+     *
+     * @return the {@link com.mongodb.ReadConcern}
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    ReadConcern getReadConcern();
+
+    /**
      * Create a new MongoCollection instance with a different default class to cast any documents returned from the database into..
      *
      * @param newDocumentClass the default class to cast any documents returned from the database into.
@@ -119,6 +136,17 @@ public interface MongoCollection<TDocument> {
      * @return a new MongoCollection instance with the different writeConcern
      */
     MongoCollection<TDocument> withWriteConcern(WriteConcern writeConcern);
+
+    /**
+     * Create a new MongoCollection instance with a different read concern.
+     *
+     * @param readConcern the new {@link ReadConcern} for the collection
+     * @return a new MongoCollection instance with the different ReadConcern
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    MongoCollection<TDocument> withReadConcern(ReadConcern readConcern);
 
     /**
      * Counts the number of documents in the collection.
@@ -154,6 +182,18 @@ public interface MongoCollection<TDocument> {
      * @mongodb.driver.manual reference/command/distinct/ Distinct
      */
     <TResult> DistinctIterable<TResult> distinct(String fieldName, Class<TResult> resultClass);
+
+    /**
+     * Gets the distinct values of the specified field name.
+     *
+     * @param fieldName   the field name
+     * @param filter      the query filter
+     * @param resultClass the default class to cast any distinct items into.
+     * @param <TResult>   the target type of the iterable.
+     * @return an iterable of distinct values
+     * @mongodb.driver.manual reference/command/distinct/ Distinct
+     */
+    <TResult> DistinctIterable<TResult> distinct(String fieldName, Bson filter, Class<TResult> resultClass);
 
     /**
      * Finds all documents in the collection.
@@ -269,6 +309,20 @@ public interface MongoCollection<TDocument> {
     void insertOne(TDocument document, SingleResultCallback<Void> callback);
 
     /**
+     * Inserts the provided document. If the document is missing an identifier, the driver should generate one.
+     *
+     * @param document the document to insert
+     * @param options  the options to apply to the operation
+     * @param callback the callback that is completed once the insert has completed
+     * @throws com.mongodb.MongoWriteException        returned via the callback
+     * @throws com.mongodb.MongoWriteConcernException returned via the callback
+     * @throws com.mongodb.MongoCommandException      returned via the callback
+     * @throws com.mongodb.MongoException             returned via the callback
+     * @since 3.2
+     */
+    void insertOne(TDocument document, InsertOneOptions options, SingleResultCallback<Void> callback);
+
+    /**
      * Inserts one or more documents.  A call to this method is equivalent to a call to the {@code bulkWrite} method
      *
      * @param documents the documents to insert
@@ -371,7 +425,7 @@ public interface MongoCollection<TDocument> {
     void updateOne(Bson filter, Bson update, UpdateOptions options, SingleResultCallback<UpdateResult> callback);
 
     /**
-     * Update a single document in the collection according to the specified arguments.
+     * Update all documents in the collection according to the specified arguments.
      *
      * @param filter   a document describing the query filter, which may not be null.
      * @param update   a document describing the update, which may not be null. The update to apply must include only update operators. T
@@ -385,7 +439,7 @@ public interface MongoCollection<TDocument> {
     void updateMany(Bson filter, Bson update, SingleResultCallback<UpdateResult> callback);
 
     /**
-     * Update a single document in the collection according to the specified arguments.
+     * Update all documents in the collection according to the specified arguments.
      *
      * @param filter   a document describing the query filter, which may not be null.
      * @param update   a document describing the update, which may not be null. The update to apply must include only update operators.

@@ -23,6 +23,8 @@ import com.mongodb.async.client.MongoClients;
 import com.mongodb.async.client.MongoCollection;
 import com.mongodb.async.client.MongoDatabase;
 import com.mongodb.client.model.CreateCollectionOptions;
+import com.mongodb.client.model.Indexes;
+import com.mongodb.client.model.TextSearchOptions;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 
@@ -99,7 +101,7 @@ public class QuickTourAdmin {
         collection.drop(callbackWhenFinished);
 
         // create an ascending index on the "i" field
-        collection.createIndex(new Document("i", 1), new SingleResultCallback<String>() {
+        collection.createIndex(Indexes.ascending("i"), new SingleResultCallback<String>() {
             @Override
             public void onResult(final String result, final Throwable t) {
                 System.out.println("Operation finished");
@@ -117,7 +119,7 @@ public class QuickTourAdmin {
 
 
         // create a text index on the "content" field
-        collection.createIndex(new Document("content", "text"), new SingleResultCallback<String>() {
+        collection.createIndex(Indexes.text("content"), new SingleResultCallback<String>() {
             @Override
             public void onResult(final String result, final Throwable t) {
                 System.out.println("Operation finished");
@@ -138,7 +140,7 @@ public class QuickTourAdmin {
 
 
         // Find using the $language operator
-        Bson textSearch = text("textual content -irrelevant", "english");
+        Bson textSearch = text("textual content -irrelevant", new TextSearchOptions().language("english"));
         collection.count(textSearch, new SingleResultCallback<Long>() {
             @Override
             public void onResult(final Long matchCount, final Throwable t) {

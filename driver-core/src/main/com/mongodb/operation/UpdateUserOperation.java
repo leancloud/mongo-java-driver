@@ -31,11 +31,12 @@ import org.bson.BsonDocument;
 
 import static com.mongodb.assertions.Assertions.notNull;
 import static com.mongodb.internal.async.ErrorHandlingResultCallback.errorHandlingCallback;
+import static com.mongodb.operation.CommandOperationHelper.VoidTransformer;
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocol;
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocolAsync;
 import static com.mongodb.operation.OperationHelper.AsyncCallableWithConnection;
 import static com.mongodb.operation.OperationHelper.CallableWithConnection;
-import static com.mongodb.operation.OperationHelper.VoidTransformer;
+import static com.mongodb.operation.OperationHelper.LOGGER;
 import static com.mongodb.operation.OperationHelper.releasingCallback;
 import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionTwoDotSix;
 import static com.mongodb.operation.OperationHelper.withConnection;
@@ -88,7 +89,7 @@ public class UpdateUserOperation implements AsyncWriteOperation<Void>, WriteOper
             @Override
             public Void call(final Connection connection) {
                 if (serverIsAtLeastVersionTwoDotSix(connection.getDescription())) {
-                    executeWrappedCommandProtocol(credential.getSource(), getCommand(), connection);
+                    executeWrappedCommandProtocol(binding, credential.getSource(), getCommand(), connection);
                 } else {
                     connection.update(getNamespace(), true, WriteConcern.ACKNOWLEDGED, asList(getUpdateRequest()));
                 }
@@ -102,12 +103,13 @@ public class UpdateUserOperation implements AsyncWriteOperation<Void>, WriteOper
         withConnection(binding, new AsyncCallableWithConnection() {
             @Override
             public void call(final AsyncConnection connection, final Throwable t) {
+                SingleResultCallback<Void> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 if (t != null) {
-                    errorHandlingCallback(callback).onResult(null, t);
+                    errHandlingCallback.onResult(null, t);
                 } else {
-                    final SingleResultCallback<Void> wrappedCallback = releasingCallback(errorHandlingCallback(callback), connection);
+                    final SingleResultCallback<Void> wrappedCallback = releasingCallback(errHandlingCallback, connection);
                     if (serverIsAtLeastVersionTwoDotSix(connection.getDescription())) {
-                        executeWrappedCommandProtocolAsync(credential.getSource(), getCommand(), connection,
+                        executeWrappedCommandProtocolAsync(binding, credential.getSource(), getCommand(), connection,
                                                            new VoidTransformer<BsonDocument>(), wrappedCallback);
                     } else {
                         connection.updateAsync(getNamespace(), true, WriteConcern.ACKNOWLEDGED, asList(getUpdateRequest()),

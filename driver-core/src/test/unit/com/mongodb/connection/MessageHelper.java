@@ -56,7 +56,7 @@ final class MessageHelper {
         return buildReply(responseTo, json, 2);
     }
 
-    private static ResponseBuffers buildReply(final int responseTo, final String json, final int responseFlags) {
+    public static ResponseBuffers buildReply(final int responseTo, final String json, final int responseFlags) {
         ByteBuf body = encodeJson(json);
         body.flip();
 
@@ -79,7 +79,7 @@ final class MessageHelper {
         headerByteBuffer.flip();
 
         ByteBufferBsonInput headerInputBuffer = new ByteBufferBsonInput(new ByteBufNIO(headerByteBuffer));
-        return new ReplyHeader(headerInputBuffer);
+        return new ReplyHeader(headerInputBuffer, ConnectionDescription.getDefaultMaxMessageSize());
     }
 
     public static String decodeCommandAsJson(final BsonInput bsonInput) {

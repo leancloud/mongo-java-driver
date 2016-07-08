@@ -25,6 +25,7 @@ import com.mongodb.bulk.IndexRequest
 import org.bson.BsonDocument
 import org.bson.BsonDocumentWrapper
 import org.bson.BsonInt32
+import org.bson.BsonInt64
 import org.bson.BsonString
 import org.bson.Document
 import org.bson.codecs.DocumentCodec
@@ -77,6 +78,33 @@ class CreateIndexesOperationSpecification extends OperationFunctionalSpecificati
 
         given:
         def keys = new BsonDocument('field', new BsonInt32(1))
+        def createIndexOperation = new CreateIndexesOperation(getNamespace(), [new IndexRequest(keys)])
+
+        when:
+        executeAsync(createIndexOperation)
+
+        then:
+        getUserCreatedIndexes('key') == [field1Index]
+    }
+
+
+    def 'should be able to create a single index with a BsonInt64'() {
+        given:
+        def keys = new BsonDocument('field', new BsonInt64(1))
+        def createIndexOperation = new CreateIndexesOperation(getNamespace(), [new IndexRequest(keys)])
+
+        when:
+        createIndexOperation.execute(getBinding())
+
+        then:
+        getUserCreatedIndexes('key') == [field1Index]
+    }
+
+    @Category(Async)
+    def 'should be able to create a single index with a BsonInt64 asynchronously'() {
+
+        given:
+        def keys = new BsonDocument('field', new BsonInt64(1))
         def createIndexOperation = new CreateIndexesOperation(getNamespace(), [new IndexRequest(keys)])
 
         when:
@@ -419,6 +447,22 @@ class CreateIndexesOperationSpecification extends OperationFunctionalSpecificati
         then:
         getIndex('a_1').get('storageEngine') == storageEngineOptions
     }
+
+    @IgnoreIf({ !serverVersionAtLeast(asList(3, 1, 8)) })
+    def 'should be able to create a partially filtered index'() {
+        given:
+        def partialFilterExpression = new Document('a', new Document('$gte', 10))
+        def createIndexOperation = new CreateIndexesOperation(getNamespace(),
+                [new IndexRequest(new BsonDocument('field', new BsonInt32(1)))
+                         .partialFilterExpression(new BsonDocumentWrapper(partialFilterExpression, new DocumentCodec()))])
+
+        when:
+        createIndexOperation.execute(getBinding())
+
+        then:
+        getUserCreatedIndexes('partialFilterExpression').head() == partialFilterExpression
+    }
+
 
     Document getIndex(final String indexName) {
         getIndexes().find {

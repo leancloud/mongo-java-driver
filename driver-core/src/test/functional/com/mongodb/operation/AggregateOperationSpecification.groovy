@@ -20,8 +20,24 @@ import category.Async
 import com.mongodb.Block
 import com.mongodb.ExplainVerbosity
 import com.mongodb.MongoExecutionTimeoutException
+import com.mongodb.MongoNamespace
 import com.mongodb.OperationFunctionalSpecification
+import com.mongodb.ReadConcern
+import com.mongodb.ReadPreference
+import com.mongodb.async.SingleResultCallback
+import com.mongodb.binding.AsyncConnectionSource
+import com.mongodb.binding.AsyncReadBinding
+import com.mongodb.binding.ConnectionSource
+import com.mongodb.binding.ReadBinding
+import com.mongodb.connection.AsyncConnection
+import com.mongodb.connection.Connection
+import com.mongodb.connection.ConnectionDescription
+import com.mongodb.connection.ServerVersion
+import org.bson.BsonArray
+import org.bson.BsonBoolean
 import org.bson.BsonDocument
+import org.bson.BsonInt32
+import org.bson.BsonInt64
 import org.bson.BsonString
 import org.bson.Document
 import org.bson.codecs.BsonDocumentCodec
@@ -58,6 +74,7 @@ class AggregateOperationSpecification extends OperationFunctionalSpecification {
         operation.getMaxTime(MILLISECONDS) == 0
         operation.getPipeline() == []
         operation.getUseCursor() == null
+        operation.getReadConcern() == ReadConcern.DEFAULT
     }
 
     def 'should set optional values correctly'(){
@@ -67,6 +84,7 @@ class AggregateOperationSpecification extends OperationFunctionalSpecification {
                 .batchSize(10)
                 .maxTime(10, MILLISECONDS)
                 .useCursor(true)
+                .readConcern(ReadConcern.MAJORITY)
 
 
         then:
@@ -74,6 +92,81 @@ class AggregateOperationSpecification extends OperationFunctionalSpecification {
         operation.getBatchSize() == 10
         operation.getMaxTime(MILLISECONDS) == 10
         operation.getUseCursor()
+        operation.getReadConcern() == ReadConcern.MAJORITY
+    }
+
+    def 'should create the expected command'() {
+        given:
+        def connection = Mock(Connection) {
+            _ * getDescription() >> Stub(ConnectionDescription) {
+                getServerVersion() >> new ServerVersion([3, 2, 0])
+            }
+        }
+        def connectionSource = Stub(ConnectionSource) {
+            getConnection() >> connection
+        }
+        def readBinding = Stub(ReadBinding) {
+            getReadConnectionSource() >> connectionSource
+        }
+
+        def pipeline = [new BsonDocument('$match', new BsonDocument('a', new BsonString('A')))]
+        def operation = new AggregateOperation<Document>(helper.namespace, pipeline, new DocumentCodec())
+                .allowDiskUse(true)
+                .batchSize(10)
+                .maxTime(10, MILLISECONDS)
+                .useCursor(true)
+                .readConcern(ReadConcern.MAJORITY)
+
+        def expectedCommand = new BsonDocument('aggregate', new BsonString(helper.namespace.getCollectionName()))
+                .append('pipeline', new BsonArray(pipeline))
+                .append('cursor', new BsonDocument('batchSize', new BsonInt32(10)))
+                .append('maxTimeMS', new BsonInt64(10))
+                .append('allowDiskUse', new BsonBoolean(true))
+                .append('readConcern', new BsonDocument('level', new BsonString('majority')))
+
+        when:
+        operation.execute(readBinding)
+
+        then:
+        1 * connection.command(helper.dbName, expectedCommand, _, _, _) >> { helper.cursorResult }
+        1 * connection.release()
+    }
+
+    def 'should create the expected command asynchronously'() {
+        given:
+        def connection = Mock(AsyncConnection) {
+            _ * getDescription() >> Stub(ConnectionDescription) {
+                getServerVersion() >> new ServerVersion([3, 2, 0])
+            }
+        }
+        def connectionSource = Stub(AsyncConnectionSource) {
+            getConnection(_) >> { it[0].onResult(connection, null) }
+        }
+        def readBinding = Stub(AsyncReadBinding) {
+            getReadConnectionSource(_) >> { it[0].onResult(connectionSource, null) }
+        }
+
+        def pipeline = [new BsonDocument('$match', new BsonDocument('a', new BsonString('A')))]
+        def operation = new AggregateOperation<Document>(helper.namespace, pipeline, new DocumentCodec())
+                .allowDiskUse(true)
+                .batchSize(10)
+                .maxTime(10, MILLISECONDS)
+                .useCursor(true)
+                .readConcern(ReadConcern.MAJORITY)
+
+        def expectedCommand = new BsonDocument('aggregate', new BsonString(helper.namespace.getCollectionName()))
+                .append('pipeline', new BsonArray(pipeline))
+                .append('cursor', new BsonDocument('batchSize', new BsonInt32(10)))
+                .append('maxTimeMS', new BsonInt64(10))
+                .append('allowDiskUse', new BsonBoolean(true))
+                .append('readConcern', new BsonDocument('level', new BsonString('majority')))
+
+        when:
+        operation.executeAsync(readBinding, Stub(SingleResultCallback))
+
+        then:
+        1 * connection.commandAsync(helper.dbName, expectedCommand, _, _, _, _) >> { it[5].onResult(helper.cursorResult, null) }
+        1 * connection.release()
     }
 
     def 'should be able to aggregate'() {
@@ -240,6 +333,133 @@ class AggregateOperationSpecification extends OperationFunctionalSpecification {
         result.containsKey('stages')
     }
 
+    def 'should use the ReadBindings readPreference to set slaveOK'() {
+        given:
+        def connection = Mock(Connection)
+        def connectionSource = Stub(ConnectionSource) {
+            getConnection() >> connection
+        }
+        def readBinding = Stub(ReadBinding) {
+            getReadConnectionSource() >> connectionSource
+            getReadPreference() >> readPreference
+        }
+        def operation = new AggregateOperation(helper.namespace, [], new BsonDocumentCodec())
+
+        when:
+        operation.execute(readBinding)
+
+        then:
+        _ * connection.getDescription() >> helper.twoFourConnectionDescription
+        1 * connection.command(helper.dbName, _, readPreference.isSlaveOk(), _, _) >> helper.inlineResult
+        1 * connection.release()
+
+        when: '2.6.0'
+        operation.execute(readBinding)
+
+        then:
+        _ * connection.getDescription() >> helper.twoSixConnectionDescription
+        1 * connection.command(helper.dbName, _, readPreference.isSlaveOk(), _, _) >> helper.cursorResult
+        1 * connection.release()
+
+        where:
+        readPreference << [ReadPreference.primary(), ReadPreference.secondary()]
+    }
+
+    def 'should use the AsyncReadBindings readPreference to set slaveOK'() {
+        given:
+        def connection = Mock(AsyncConnection)
+        def connectionSource = Stub(AsyncConnectionSource) {
+            getConnection(_) >> { it[0].onResult(connection, null) }
+        }
+        def readBinding = Stub(AsyncReadBinding) {
+            getReadPreference() >> readPreference
+            getReadConnectionSource(_) >> { it[0].onResult(connectionSource, null) }
+        }
+        def operation = new AggregateOperation(helper.namespace, [], new BsonDocumentCodec())
+
+        when:
+        operation.executeAsync(readBinding, Stub(SingleResultCallback))
+
+        then:
+        _ * connection.getDescription() >> helper.twoFourConnectionDescription
+        1 * connection.commandAsync(helper.dbName, _, readPreference.isSlaveOk(), _, _, _) >> { it[5].onResult(helper.inlineResult, null) }
+        1 * connection.release()
+
+        when: '2.6.0'
+        operation.executeAsync(readBinding, Stub(SingleResultCallback))
+
+        then:
+        _ * connection.getDescription() >> helper.twoSixConnectionDescription
+        1 * connection.commandAsync(helper.dbName, _, readPreference.isSlaveOk(), _, _, _) >> { it[5].onResult(helper.cursorResult, null) }
+        1 * connection.release()
+
+        where:
+        readPreference << [ReadPreference.primary(), ReadPreference.secondary()]
+    }
+
+    def 'should validate the ReadConcern'() {
+        given:
+        def readBinding = Stub(ReadBinding) {
+            getReadConnectionSource() >> Stub(ConnectionSource) {
+                getConnection() >> Stub(Connection) {
+                    getDescription() >> Stub(ConnectionDescription) {
+                        getServerVersion() >> new ServerVersion([3, 0, 0])
+                    }
+                }
+            }
+        }
+        def operation = new AggregateOperation(helper.namespace, [], new BsonDocumentCodec()).readConcern(readConcern)
+
+        when:
+        operation.execute(readBinding)
+
+        then:
+        thrown(IllegalArgumentException)
+
+        where:
+        readConcern << [ReadConcern.MAJORITY, ReadConcern.LOCAL]
+    }
+
+    def 'should validate the ReadConcern asynchronously'() {
+        given:
+        def connection = Stub(AsyncConnection) {
+            getDescription() >>  Stub(ConnectionDescription) {
+                getServerVersion() >> new ServerVersion([3, 0, 0])
+            }
+        }
+        def connectionSource = Stub(AsyncConnectionSource) {
+            getConnection(_) >> { it[0].onResult(connection, null) }
+        }
+        def readBinding = Stub(AsyncReadBinding) {
+            getReadConnectionSource(_) >> { it[0].onResult(connectionSource, null) }
+        }
+        def operation = new AggregateOperation(helper.namespace, [], new BsonDocumentCodec()).readConcern(readConcern)
+        def callback = Mock(SingleResultCallback)
+
+        when:
+        operation.executeAsync(readBinding, callback)
+
+        then:
+        1 * callback.onResult(null, _ as IllegalArgumentException)
+
+        where:
+        readConcern << [ReadConcern.MAJORITY, ReadConcern.LOCAL]
+    }
+
+    def helper = [
+            dbName: 'db',
+            namespace: new MongoNamespace('db', 'coll'),
+            twoFourConnectionDescription: Stub(ConnectionDescription) {
+                getServerVersion() >> new ServerVersion([2, 4, 0])
+            },
+            twoSixConnectionDescription : Stub(ConnectionDescription) {
+                getServerVersion() >> new ServerVersion([2, 6, 0])
+            },
+            inlineResult: BsonDocument.parse('{ok: 1.0}').append('result', new BsonArrayWrapper([])),
+            cursorResult: BsonDocument.parse('{ok: 1.0}')
+                    .append('cursor', new BsonDocument('id', new BsonInt64(0)).append('ns', new BsonString('db.coll'))
+                    .append('firstBatch', new BsonArrayWrapper([])))
+    ]
 
     private static List<Boolean> useCursorOptions() {
         [null, true, false]

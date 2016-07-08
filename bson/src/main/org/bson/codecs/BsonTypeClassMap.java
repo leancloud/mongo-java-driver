@@ -33,8 +33,8 @@ import org.bson.types.Symbol;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * <p>A map from a BSON types to the Class to which it should be decoded.  This class is useful if, for example,
@@ -87,6 +87,9 @@ public class BsonTypeClassMap {
         this(Collections.<BsonType, Class<?>>emptyMap());
     }
 
+    Set<BsonType> keys() {
+        return map.keySet();
+    }
 
     /**
      * Gets the Class that is mapped to the given BSON type.
@@ -99,7 +102,6 @@ public class BsonTypeClassMap {
     }
 
     private void addDefaults() {
-        map.put(BsonType.ARRAY, List.class);
         map.put(BsonType.BINARY, Binary.class);
         map.put(BsonType.BOOLEAN, Boolean.class);
         map.put(BsonType.DATE_TIME, Date.class);

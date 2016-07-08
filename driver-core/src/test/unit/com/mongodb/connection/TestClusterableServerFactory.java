@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright 2008-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package com.mongodb.connection;
 
 import com.mongodb.ServerAddress;
+import com.mongodb.event.ServerListener;
 import org.bson.types.ObjectId;
 
 import java.util.Collections;
@@ -32,8 +33,8 @@ public class TestClusterableServerFactory implements ClusterableServerFactory {
     private final Map<ServerAddress, TestServer> addressToServerMap = new HashMap<ServerAddress, TestServer>();
 
     @Override
-    public ClusterableServer create(final ServerAddress serverAddress) {
-        addressToServerMap.put(serverAddress, new TestServer(serverAddress));
+    public ClusterableServer create(final ServerAddress serverAddress, final ServerListener serverListener) {
+        addressToServerMap.put(serverAddress, new TestServer(serverAddress, serverListener));
         return addressToServerMap.get(serverAddress);
     }
 
@@ -141,6 +142,7 @@ public class TestClusterableServerFactory implements ClusterableServerFactory {
                                 .hosts(hostsSet)
                                 .passives(passivesSet)
                                 .setName(setName)
-                                .electionId(electionId);
+                                .electionId(electionId)
+                                .setVersion(1);
     }
 }

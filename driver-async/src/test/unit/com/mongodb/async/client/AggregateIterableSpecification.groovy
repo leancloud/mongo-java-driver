@@ -20,10 +20,13 @@ import com.mongodb.Block
 import com.mongodb.Function
 import com.mongodb.MongoException
 import com.mongodb.MongoNamespace
+import com.mongodb.ReadConcern
 import com.mongodb.async.AsyncBatchCursor
 import com.mongodb.async.FutureResultCallback
+import com.mongodb.async.SingleResultCallback
 import com.mongodb.operation.AggregateOperation
 import com.mongodb.operation.AggregateToCollectionOperation
+import com.mongodb.operation.AsyncOperationExecutor
 import com.mongodb.operation.FindOperation
 import org.bson.BsonDocument
 import org.bson.BsonInt32
@@ -47,6 +50,7 @@ class AggregateIterableSpecification extends Specification {
     def namespace = new MongoNamespace('db', 'coll')
     def codecRegistry = fromProviders([new ValueCodecProvider(), new DocumentCodecProvider(), new BsonValueCodecProvider()])
     def readPreference = secondary()
+    def readConcern = ReadConcern.DEFAULT
 
     def 'should build the expected AggregationOperation'() {
         given:
@@ -57,8 +61,8 @@ class AggregateIterableSpecification extends Specification {
         }
         def executor = new TestOperationExecutor([cursor, cursor, cursor, cursor, cursor]);
         def pipeline = [new Document('$match', 1)]
-        def aggregationIterable = new AggregateIterableImpl(namespace, Document, Document, codecRegistry, readPreference, executor,
-                                                            pipeline)
+        def aggregationIterable = new AggregateIterableImpl(namespace, Document, Document, codecRegistry, readPreference, readConcern,
+                executor, pipeline)
 
         when: 'default input should be as expected'
         aggregationIterable.into([]) { result, t -> }
@@ -97,7 +101,7 @@ class AggregateIterableSpecification extends Specification {
         def pipeline = [new Document('$match', 1), new Document('$out', collectionName)]
 
         when: 'aggregation includes $out'
-        new AggregateIterableImpl(namespace, Document, Document, codecRegistry, readPreference, executor, pipeline)
+        new AggregateIterableImpl(namespace, Document, Document, codecRegistry, readPreference, readConcern, executor, pipeline)
                 .batchSize(99)
                 .maxTime(999, MILLISECONDS)
                 .allowDiskUse(true)
@@ -120,7 +124,7 @@ class AggregateIterableSpecification extends Specification {
 
         when: 'toCollection should work as expected'
         def futureResultCallback = new FutureResultCallback()
-        new AggregateIterableImpl(namespace, Document, Document, codecRegistry, readPreference, executor, pipeline)
+        new AggregateIterableImpl(namespace, Document, Document, codecRegistry, readPreference, readConcern, executor, pipeline)
                 .allowDiskUse(true)
                 .toCollection(futureResultCallback);
         futureResultCallback.get()
@@ -138,8 +142,8 @@ class AggregateIterableSpecification extends Specification {
         def codecRegistry = fromProviders([new ValueCodecProvider(), new BsonValueCodecProvider()])
         def executor = new TestOperationExecutor([new MongoException('failure')])
         def pipeline = [new BsonDocument('$match', new BsonInt32(1))]
-        def aggregationIterable = new AggregateIterableImpl(namespace, Document, BsonDocument, codecRegistry, readPreference, executor,
-                                                            pipeline)
+        def aggregationIterable = new AggregateIterableImpl(namespace, Document, BsonDocument, codecRegistry, readPreference, readConcern,
+                executor, pipeline)
 
         def futureResultCallback = new FutureResultCallback<List<BsonDocument>>()
 
@@ -158,7 +162,7 @@ class AggregateIterableSpecification extends Specification {
 
         when: 'a codec is missing'
         futureResultCallback = new FutureResultCallback<List<BsonDocument>>()
-        new AggregateIterableImpl(namespace, Document, Document, codecRegistry, readPreference, executor, pipeline)
+        new AggregateIterableImpl(namespace, Document, Document, codecRegistry, readPreference,  readConcern, executor, pipeline)
                 .into([], futureResultCallback)
         futureResultCallback.get()
 
@@ -186,7 +190,7 @@ class AggregateIterableSpecification extends Specification {
         }
         def executor = new TestOperationExecutor([cursor(), cursor(), cursor(), cursor(), cursor()]);
         def mongoIterable = new AggregateIterableImpl(namespace, Document, Document, codecRegistry, readPreference,
-                                                      executor, [new BsonDocument('$match', new BsonInt32(1))])
+                readConcern, executor, [new BsonDocument('$match', new BsonInt32(1))])
 
         when:
         def results = new FutureResultCallback()
@@ -244,6 +248,51 @@ class AggregateIterableSpecification extends Specification {
         then:
         results.get() == cannedResults
         batchCursor.isClosed()
+    }
+
+    def 'should check variables using notNull'() {
+        given:
+        def mongoIterable = new AggregateIterableImpl(namespace, Document, Document, codecRegistry, readPreference,
+                readConcern, Stub(AsyncOperationExecutor), [Document.parse('{$match: 1}')])
+        def callback = Stub(SingleResultCallback)
+        def block = Stub(Block)
+        def target = Stub(List)
+
+        when:
+        mongoIterable.first(null)
+
+        then:
+        thrown(IllegalArgumentException)
+
+        when:
+        mongoIterable.into(null, callback)
+
+        then:
+        thrown(IllegalArgumentException)
+
+        when:
+        mongoIterable.into(target, null)
+
+        then:
+        thrown(IllegalArgumentException)
+
+        when:
+        mongoIterable.forEach(null, callback)
+
+        then:
+        thrown(IllegalArgumentException)
+
+        when:
+        mongoIterable.forEach(block, null)
+
+        then:
+        thrown(IllegalArgumentException)
+
+        when:
+        mongoIterable.map()
+
+        then:
+        thrown(IllegalArgumentException)
     }
 
 }

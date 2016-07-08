@@ -19,8 +19,25 @@ package com.mongodb.operation
 import category.Async
 import category.Slow
 import com.mongodb.Block
+import com.mongodb.MongoNamespace
 import com.mongodb.OperationFunctionalSpecification
+import com.mongodb.ReadConcern
+import com.mongodb.ReadPreference
+import com.mongodb.async.SingleResultCallback
+import com.mongodb.binding.AsyncConnectionSource
+import com.mongodb.binding.AsyncReadBinding
+import com.mongodb.binding.ConnectionSource
+import com.mongodb.binding.ReadBinding
+import com.mongodb.connection.AsyncConnection
+import com.mongodb.connection.Connection
+import com.mongodb.connection.ConnectionDescription
+import com.mongodb.connection.ServerVersion
+import org.bson.BsonDocument
+import org.bson.BsonInt32
+import org.bson.BsonJavaScript
+import org.bson.BsonString
 import org.bson.Document
+import org.bson.codecs.Decoder
 import org.bson.codecs.DocumentCodec
 import org.junit.experimental.categories.Category
 import spock.lang.IgnoreIf
@@ -43,8 +60,32 @@ class ParallelCollectionScanOperationSpecification extends OperationFunctionalSp
     def 'setup'() {
         (1..2000).each {
             ids.put(it, true)
-            getCollectionHelper().insertDocuments(new DocumentCodec(), new Document('_id', it))
         }
+
+        getCollectionHelper().insertDocuments(new DocumentCodec(), (1..2000).collect( { new Document('_id', it) } ))
+    }
+
+
+    def 'should have the correct defaults'() {
+        when:
+        def operation = new ParallelCollectionScanOperation<Document>(getNamespace(), 3, new DocumentCodec())
+
+        then:
+        operation.getBatchSize() == 0
+        operation.getNumCursors() == 3
+        operation.getReadConcern() == ReadConcern.DEFAULT
+    }
+
+    def 'should set optional values correctly'(){
+        when:
+        def operation = new ParallelCollectionScanOperation<Document>(getNamespace(), 3, new DocumentCodec())
+            .batchSize(10)
+            .readConcern(ReadConcern.MAJORITY)
+
+        then:
+        operation.getBatchSize() == 10
+        operation.getNumCursors() == 3
+        operation.getReadConcern() == ReadConcern.MAJORITY
     }
 
     def 'should visit all documents'() {
@@ -82,4 +123,182 @@ class ParallelCollectionScanOperationSpecification extends OperationFunctionalSp
         ids.isEmpty()
     }
 
+    def 'should use the ReadBindings readPreference to set slaveOK'() {
+        given:
+        def connection = Mock(Connection)
+        def connectionSource = Stub(ConnectionSource) {
+            getConnection() >> connection
+        }
+        def readBinding = Stub(ReadBinding) {
+            getReadConnectionSource() >> connectionSource
+            getReadPreference() >> readPreference
+        }
+        def operation = new ParallelCollectionScanOperation<Document>(helper.namespace, 2, helper.decoder)
+
+        when:
+        operation.execute(readBinding)
+
+        then:
+        _ * connection.getDescription() >> helper.connectionDescription
+        1 * connection.command(helper.dbName, _, readPreference.isSlaveOk(), _, _) >> helper.commandResult
+        1 * connection.release()
+
+        where:
+        readPreference << [ReadPreference.primary(), ReadPreference.secondary()]
+    }
+
+    def 'should use the AsyncReadBindings readPreference to set slaveOK'() {
+        given:
+        def connection = Mock(AsyncConnection)
+        def connectionSource = Stub(AsyncConnectionSource) {
+            getConnection(_) >> { it[0].onResult(connection, null) }
+        }
+        def readBinding = Stub(AsyncReadBinding) {
+            getReadPreference() >> readPreference
+            getReadConnectionSource(_) >> { it[0].onResult(connectionSource, null) }
+        }
+        def operation = new ParallelCollectionScanOperation<Document>(helper.namespace, 2, helper.decoder)
+
+        when:
+        operation.executeAsync(readBinding, Stub(SingleResultCallback))
+
+        then:
+        _ * connection.getDescription() >> helper.connectionDescription
+        1 * connection.commandAsync(helper.dbName, _, readPreference.isSlaveOk(), _, _, _) >> {
+            it[5].onResult(helper.commandResult, null) }
+        1 * connection.release()
+
+        where:
+        readPreference << [ReadPreference.primary(), ReadPreference.secondary()]
+    }
+
+    def 'should create the expected command'() {
+        given:
+        def connection = Mock(Connection) {
+            _ * getDescription() >> Stub(ConnectionDescription) {
+                getServerVersion() >> new ServerVersion([3, 2, 0])
+            }
+        }
+        def connectionSource = Stub(ConnectionSource) {
+            getConnection() >> connection
+        }
+        def readBinding = Stub(ReadBinding) {
+            getReadConnectionSource() >> connectionSource
+        }
+
+        def operation = new ParallelCollectionScanOperation<Document>(helper.namespace, 2, helper.decoder)
+        def expectedCommand = new BsonDocument('parallelCollectionScan', new BsonString(helper.namespace.getCollectionName()))
+                .append('numCursors', new BsonInt32(2))
+
+        when:
+        operation.execute(readBinding)
+
+        then:
+        1 * connection.command(helper.dbName, expectedCommand, _, _, _) >> { helper.commandResult }
+        1 * connection.release()
+
+        when:
+        operation.batchSize(10).readConcern(ReadConcern.MAJORITY)
+        expectedCommand.append('readConcern', new BsonDocument('level', new BsonString('majority')))
+
+        operation.execute(readBinding)
+
+        then:
+        1 * connection.command(helper.dbName, expectedCommand, _, _, _) >> { helper.commandResult }
+        1 * connection.release()
+    }
+
+    def 'should create the expected command asynchronously'() {
+        given:
+        def connection = Mock(AsyncConnection) {
+            _ * getDescription() >> Stub(ConnectionDescription) {
+                getServerVersion() >> new ServerVersion([3, 2, 0])
+            }
+        }
+        def connectionSource = Stub(AsyncConnectionSource) {
+            getConnection(_) >> { it[0].onResult(connection, null) }
+        }
+        def readBinding = Stub(AsyncReadBinding) {
+            getReadConnectionSource(_) >> { it[0].onResult(connectionSource, null) }
+        }
+        def operation = new ParallelCollectionScanOperation<Document>(helper.namespace, 2, helper.decoder)
+        def expectedCommand = new BsonDocument('parallelCollectionScan', new BsonString(helper.namespace.getCollectionName()))
+                .append('numCursors', new BsonInt32(2))
+
+        when:
+        operation.executeAsync(readBinding, Stub(SingleResultCallback))
+
+        then:
+        1 * connection.commandAsync(helper.dbName, expectedCommand, _, _, _, _) >> { it[5].onResult(helper.commandResult, null) }
+        1 * connection.release()
+
+        when:
+        operation.batchSize(10).readConcern(ReadConcern.MAJORITY)
+        expectedCommand.append('readConcern', new BsonDocument('level', new BsonString('majority')))
+
+        operation.executeAsync(readBinding, Stub(SingleResultCallback))
+
+        then:
+        1 * connection.commandAsync(helper.dbName, expectedCommand, _, _, _, _) >> { it[5].onResult(helper.commandResult, null) }
+        1 * connection.release()
+    }
+
+    def 'should validate the ReadConcern'() {
+        given:
+        def readBinding = Stub(ReadBinding) {
+            getReadConnectionSource() >> Stub(ConnectionSource) {
+                getConnection() >> Stub(Connection) {
+                    getDescription() >> Stub(ConnectionDescription) {
+                        getServerVersion() >> new ServerVersion([3, 0, 0])
+                    }
+                }
+            }
+        }
+        def operation = new MapReduceWithInlineResultsOperation<Document>(helper.namespace, new BsonJavaScript('function(){ }'),
+                new BsonJavaScript('function(key, values){ }'), helper.decoder).readConcern(readConcern)
+
+        when:
+        operation.execute(readBinding)
+
+        then:
+        thrown(IllegalArgumentException)
+
+        where:
+        readConcern << [ReadConcern.MAJORITY, ReadConcern.LOCAL]
+    }
+
+    def 'should validate the ReadConcern asynchronously'() {
+        given:
+        def connection = Stub(AsyncConnection) {
+            getDescription() >>  Stub(ConnectionDescription) {
+                getServerVersion() >> new ServerVersion([3, 0, 0])
+            }
+        }
+        def connectionSource = Stub(AsyncConnectionSource) {
+            getConnection(_) >> { it[0].onResult(connection, null) }
+        }
+        def readBinding = Stub(AsyncReadBinding) {
+            getReadConnectionSource(_) >> { it[0].onResult(connectionSource, null) }
+        }
+        def operation = new MapReduceWithInlineResultsOperation<Document>(helper.namespace, new BsonJavaScript('function(){ }'),
+                new BsonJavaScript('function(key, values){ }'), helper.decoder).readConcern(readConcern)
+        def callback = Mock(SingleResultCallback)
+
+        when:
+        operation.executeAsync(readBinding, callback)
+
+        then:
+        1 * callback.onResult(null, _ as IllegalArgumentException)
+
+        where:
+        readConcern << [ReadConcern.MAJORITY, ReadConcern.LOCAL]
+    }
+
+    def helper = [
+            dbName: 'db',
+            namespace: new MongoNamespace('db', 'coll'),
+            decoder: Stub(Decoder),
+            commandResult: BsonDocument.parse('{ok: 1.0, cursors: []}'),
+            connectionDescription: Stub(ConnectionDescription)
+    ]
 }

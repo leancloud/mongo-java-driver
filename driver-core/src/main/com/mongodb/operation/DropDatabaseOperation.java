@@ -23,9 +23,9 @@ import org.bson.BsonDocument;
 import org.bson.BsonInt32;
 
 import static com.mongodb.assertions.Assertions.notNull;
+import static com.mongodb.operation.CommandOperationHelper.VoidTransformer;
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocol;
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocolAsync;
-import static com.mongodb.operation.OperationHelper.VoidTransformer;
 
 /**
  * Operation to drop a database in MongoDB.  The {@code execute} method throws MongoCommandFailureException if something goes wrong, but
@@ -48,11 +48,11 @@ public class DropDatabaseOperation implements AsyncWriteOperation<Void>, WriteOp
 
     @Override
     public Void execute(final WriteBinding binding) {
-        return executeWrappedCommandProtocol(databaseName, DROP_DATABASE, binding, new VoidTransformer<BsonDocument>());
+        return executeWrappedCommandProtocol(binding, databaseName, DROP_DATABASE, new VoidTransformer<BsonDocument>());
     }
 
     @Override
     public void executeAsync(final AsyncWriteBinding binding, final SingleResultCallback<Void> callback) {
-        executeWrappedCommandProtocolAsync(databaseName, DROP_DATABASE, binding, new VoidTransformer<BsonDocument>(), callback);
+        executeWrappedCommandProtocolAsync(binding, databaseName, DROP_DATABASE, new VoidTransformer<BsonDocument>(), callback);
     }
 }

@@ -25,9 +25,9 @@ import org.bson.BsonDocument;
 import org.bson.BsonString;
 
 import static com.mongodb.assertions.Assertions.notNull;
+import static com.mongodb.operation.CommandOperationHelper.VoidTransformer;
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocol;
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocolAsync;
-import static com.mongodb.operation.OperationHelper.VoidTransformer;
 
 /**
  * An operation that renames the given collection to the new name.
@@ -82,12 +82,12 @@ public class RenameCollectionOperation implements AsyncWriteOperation<Void>, Wri
      */
     @Override
     public Void execute(final WriteBinding binding) {
-        return executeWrappedCommandProtocol("admin", getCommand(), binding, new VoidTransformer<BsonDocument>());
+        return executeWrappedCommandProtocol(binding, "admin", getCommand(), new VoidTransformer<BsonDocument>());
     }
 
     @Override
     public void executeAsync(final AsyncWriteBinding binding, final SingleResultCallback<Void> callback) {
-        executeWrappedCommandProtocolAsync("admin", getCommand(), binding, new VoidTransformer<BsonDocument>(), callback);
+        executeWrappedCommandProtocolAsync(binding, "admin", getCommand(), new VoidTransformer<BsonDocument>(), callback);
     }
 
     private BsonDocument getCommand() {

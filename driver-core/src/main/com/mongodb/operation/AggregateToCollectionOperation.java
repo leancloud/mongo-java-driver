@@ -20,21 +20,28 @@ import com.mongodb.MongoNamespace;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.binding.AsyncWriteBinding;
 import com.mongodb.binding.WriteBinding;
+import com.mongodb.connection.AsyncConnection;
+import com.mongodb.connection.Connection;
+import com.mongodb.connection.ConnectionDescription;
 import org.bson.BsonArray;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
 import org.bson.BsonInt64;
 import org.bson.BsonString;
-import org.bson.codecs.BsonDocumentCodec;
 
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static com.mongodb.assertions.Assertions.isTrueArgument;
 import static com.mongodb.assertions.Assertions.notNull;
+import static com.mongodb.internal.async.ErrorHandlingResultCallback.errorHandlingCallback;
+import static com.mongodb.operation.CommandOperationHelper.VoidTransformer;
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocol;
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocolAsync;
-import static com.mongodb.operation.OperationHelper.VoidTransformer;
+import static com.mongodb.operation.OperationHelper.LOGGER;
+import static com.mongodb.operation.OperationHelper.releasingCallback;
+import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionThreeDotTwo;
+import static com.mongodb.operation.OperationHelper.withConnection;
 
 /**
  * An operation that executes an aggregation that writes its results to a collection (which is what makes this a write operation rather than
@@ -48,6 +55,7 @@ public class AggregateToCollectionOperation implements AsyncWriteOperation<Void>
     private final List<BsonDocument> pipeline;
     private Boolean allowDiskUse;
     private long maxTimeMS;
+    private Boolean bypassDocumentValidation;
 
     /**
      * Construct a new instance.
@@ -124,22 +132,60 @@ public class AggregateToCollectionOperation implements AsyncWriteOperation<Void>
         return this;
     }
 
-    @SuppressWarnings("unchecked")
+    /**
+     * Gets the bypass document level validation flag
+     *
+     * @return the bypass document level validation flag
+     * @since 3.2
+     */
+    public Boolean getBypassDocumentValidation() {
+        return bypassDocumentValidation;
+    }
+
+    /**
+     * Sets the bypass document level validation flag.
+     *
+     * <p>Note: This only applies when an $out stage is specified</p>.
+     *
+     * @param bypassDocumentValidation If true, allows the write to opt-out of document level validation.
+     * @return this
+     * @since 3.2
+     * @mongodb.driver.manual reference/command/aggregate/ Aggregation
+     * @mongodb.server.release 3.2
+     */
+    public AggregateToCollectionOperation bypassDocumentValidation(final Boolean bypassDocumentValidation) {
+        this.bypassDocumentValidation = bypassDocumentValidation;
+        return this;
+    }
+
     @Override
     public Void execute(final WriteBinding binding) {
-        executeWrappedCommandProtocol(namespace.getDatabaseName(), getCommand(), new BsonDocumentCodec(), binding,
-                                      new VoidTransformer<BsonDocument>());
-
-        return null;
+        return withConnection(binding, new OperationHelper.CallableWithConnection<Void>() {
+            @Override
+            public Void call(final Connection connection) {
+                return executeWrappedCommandProtocol(binding, namespace.getDatabaseName(), getCommand(connection.getDescription()),
+                        connection, new VoidTransformer<BsonDocument>());
+            }
+        });
     }
 
     @Override
     public void executeAsync(final AsyncWriteBinding binding, final SingleResultCallback<Void> callback) {
-        executeWrappedCommandProtocolAsync(namespace.getDatabaseName(), getCommand(), new BsonDocumentCodec(), binding,
-                                           new VoidTransformer<BsonDocument>(), callback);
+        withConnection(binding, new OperationHelper.AsyncCallableWithConnection() {
+            @Override
+            public void call(final AsyncConnection connection, final Throwable t) {
+                SingleResultCallback<Void> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
+                if (t != null) {
+                    errHandlingCallback.onResult(null, t);
+                } else {
+                    executeWrappedCommandProtocolAsync(binding, namespace.getDatabaseName(), getCommand(connection.getDescription()),
+                            connection, new VoidTransformer<BsonDocument>(), releasingCallback(errHandlingCallback, connection));
+                }
+            }
+        });
     }
 
-    private BsonDocument getCommand() {
+    private BsonDocument getCommand(final ConnectionDescription description) {
         BsonDocument commandDocument = new BsonDocument("aggregate", new BsonString(namespace.getCollectionName()));
         commandDocument.put("pipeline", new BsonArray(pipeline));
         if (maxTimeMS > 0) {
@@ -147,6 +193,9 @@ public class AggregateToCollectionOperation implements AsyncWriteOperation<Void>
         }
         if (allowDiskUse != null) {
             commandDocument.put("allowDiskUse", BsonBoolean.valueOf(allowDiskUse));
+        }
+        if (bypassDocumentValidation != null && serverIsAtLeastVersionThreeDotTwo(description)) {
+            commandDocument.put("bypassDocumentValidation", BsonBoolean.valueOf(bypassDocumentValidation));
         }
         return commandDocument;
     }

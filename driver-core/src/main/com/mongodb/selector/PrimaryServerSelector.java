@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,10 +25,13 @@ import java.util.List;
  * A server selector that chooses servers that are primaries.
  *
  * @since 3.0
+ * @deprecated Use either {@link ReadPreferenceServerSelector} or {@link WritableServerSelector}, depending on your requirements
  */
+@Deprecated
 public final class PrimaryServerSelector implements ServerSelector {
 
     @Override
+    @SuppressWarnings("deprecation")
     public List<ServerDescription> select(final ClusterDescription clusterDescription) {
         return clusterDescription.getPrimaries();
     }

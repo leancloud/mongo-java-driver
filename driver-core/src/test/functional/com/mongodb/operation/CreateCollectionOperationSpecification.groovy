@@ -19,6 +19,9 @@ package com.mongodb.operation
 import category.Async
 import com.mongodb.MongoServerException
 import com.mongodb.OperationFunctionalSpecification
+import com.mongodb.WriteConcernException
+import com.mongodb.client.model.ValidationAction
+import com.mongodb.client.model.ValidationLevel
 import org.bson.BsonDocument
 import org.bson.BsonString
 import org.bson.Document
@@ -40,13 +43,23 @@ class CreateCollectionOperationSpecification extends OperationFunctionalSpecific
 
         then:
         !operation.isCapped()
-        operation.sizeInBytes == 0
+        operation.getSizeInBytes() == 0
         operation.isAutoIndex()
         operation.getMaxDocuments() == 0
-        operation.usePowerOf2Sizes == null
+        operation.isUsePowerOf2Sizes() == null
+        operation.getStorageEngineOptions() == null
+        operation.getIndexOptionDefaults() == null
+        operation.getValidator() == null
+        operation.getValidationLevel() == null
+        operation.getValidationAction() == null
     }
 
     def 'should set optional values correctly'(){
+        given:
+        def storageEngineOptions = BsonDocument.parse('{ mmapv1 : {}}')
+        def indexOptionDefaults = BsonDocument.parse('{ storageEngine: { mmapv1 : {} }}')
+        def validator = BsonDocument.parse('{ level: { $gte : 10 }}')
+
         when:
         CreateCollectionOperation operation = new CreateCollectionOperation(getDatabaseName(), getCollectionName())
             .autoIndex(false)
@@ -54,13 +67,23 @@ class CreateCollectionOperationSpecification extends OperationFunctionalSpecific
             .sizeInBytes(1000)
             .maxDocuments(1000)
             .usePowerOf2Sizes(true)
+            .storageEngineOptions(storageEngineOptions)
+            .indexOptionDefaults(indexOptionDefaults)
+            .validator(validator)
+            .validationLevel(ValidationLevel.MODERATE)
+            .validationAction(ValidationAction.WARN)
 
         then:
         operation.isCapped()
         operation.sizeInBytes == 1000
         !operation.isAutoIndex()
         operation.getMaxDocuments() == 1000
-        operation.usePowerOf2Sizes == true
+        operation.isUsePowerOf2Sizes() == true
+        operation.getStorageEngineOptions() == storageEngineOptions
+        operation.getIndexOptionDefaults() == indexOptionDefaults
+        operation.getValidator() == validator
+        operation.getValidationLevel() == ValidationLevel.MODERATE
+        operation.getValidationAction() == ValidationAction.WARN
     }
 
     def 'should create a collection'() {
@@ -162,11 +185,55 @@ class CreateCollectionOperationSpecification extends OperationFunctionalSpecific
         }
     }
 
+    @IgnoreIf({ !serverVersionAtLeast(asList(3, 1, 8)) })
+    def 'should allow indexOptionDefaults'() {
+        given:
+        assert !collectionNameExists(getCollectionName())
+        def indexOptionDefaults = BsonDocument.parse('{ storageEngine: { mmapv1 : {} }}')
+
+        when:
+        new CreateCollectionOperation(getDatabaseName(), getCollectionName())
+                .indexOptionDefaults(indexOptionDefaults)
+                .execute(getBinding())
+
+        then:
+        getCollectionInfo(getCollectionName()).get('options').get('indexOptionDefaults') == indexOptionDefaults
+    }
+
+
+    @IgnoreIf({ !serverVersionAtLeast(asList(3, 1, 8)) })
+    def 'should allow validator'() {
+        given:
+        assert !collectionNameExists(getCollectionName())
+        def validator = BsonDocument.parse('{ level: { $gte : 10 }}')
+
+        when:
+        new CreateCollectionOperation(getDatabaseName(), getCollectionName())
+                .validator(validator)
+                .validationLevel(ValidationLevel.MODERATE)
+                .validationAction(ValidationAction.ERROR)
+                .execute(getBinding())
+
+        then:
+        def options = getCollectionInfo(getCollectionName()).get('options')
+        options.get('validator') == validator
+        options.get('validationLevel') == new BsonString(ValidationLevel.MODERATE.getValue())
+        options.get('validationAction') == new BsonString(ValidationAction.ERROR.getValue())
+
+        when:
+        getCollectionHelper().insertDocuments(BsonDocument.parse('{ level: 8}'))
+
+        then:
+        WriteConcernException writeConcernException = thrown()
+        writeConcernException.getErrorCode() == 121
+    }
+
+    def getCollectionInfo(String collectionName) {
+        new ListCollectionsOperation(databaseName, new BsonDocumentCodec()).filter(new BsonDocument('name',
+                new BsonString(collectionName))).execute(getBinding()).tryNext()?.head()
+    }
+
     def collectionNameExists(String collectionName) {
-        def cursor = new ListCollectionsOperation(databaseName, new DocumentCodec()).execute(getBinding())
-        if (!cursor.hasNext()) {
-            return false
-        }
-        cursor.next()*.get('name').contains(collectionName)
+        getCollectionInfo(collectionName) != null
     }
 }

@@ -18,10 +18,13 @@ package com.mongodb.async.client;
 
 import com.mongodb.Function;
 import com.mongodb.MongoNamespace;
+import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
 import com.mongodb.WriteConcern;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.client.model.CreateCollectionOptions;
+import com.mongodb.client.model.IndexOptionDefaults;
+import com.mongodb.client.model.ValidationOptions;
 import com.mongodb.operation.AsyncOperationExecutor;
 import com.mongodb.operation.CommandReadOperation;
 import com.mongodb.operation.CreateCollectionOperation;
@@ -32,21 +35,22 @@ import org.bson.codecs.configuration.CodecRegistry;
 import org.bson.conversions.Bson;
 
 import static com.mongodb.assertions.Assertions.notNull;
-import static com.mongodb.async.client.MongoClientImpl.getDefaultCodecRegistry;
 
 class MongoDatabaseImpl implements MongoDatabase {
     private final String name;
     private final ReadPreference readPreference;
     private final CodecRegistry codecRegistry;
     private final WriteConcern writeConcern;
+    private final ReadConcern readConcern;
     private final AsyncOperationExecutor executor;
 
     MongoDatabaseImpl(final String name, final CodecRegistry codecRegistry, final ReadPreference readPreference,
-                      final WriteConcern writeConcern, final AsyncOperationExecutor executor) {
+                      final WriteConcern writeConcern, final ReadConcern readConcern, final AsyncOperationExecutor executor) {
         this.name = notNull("name", name);
         this.codecRegistry = notNull("codecRegistry", codecRegistry);
         this.readPreference = notNull("readPreference", readPreference);
         this.writeConcern = notNull("writeConcern", writeConcern);
+        this.readConcern = notNull("readConcern", readConcern);
         this.executor = notNull("executor", executor);
     }
 
@@ -71,24 +75,34 @@ class MongoDatabaseImpl implements MongoDatabase {
     }
 
     @Override
+    public ReadConcern getReadConcern() {
+        return readConcern;
+    }
+
+    @Override
     public MongoDatabase withCodecRegistry(final CodecRegistry codecRegistry) {
-        return new MongoDatabaseImpl(name, codecRegistry, readPreference, writeConcern, executor);
+        return new MongoDatabaseImpl(name, codecRegistry, readPreference, writeConcern, readConcern, executor);
     }
 
     @Override
     public MongoDatabase withReadPreference(final ReadPreference readPreference) {
-        return new MongoDatabaseImpl(name, codecRegistry, readPreference, writeConcern, executor);
+        return new MongoDatabaseImpl(name, codecRegistry, readPreference, writeConcern, readConcern, executor);
     }
 
     @Override
     public MongoDatabase withWriteConcern(final WriteConcern writeConcern) {
-        return new MongoDatabaseImpl(name, codecRegistry, readPreference, writeConcern, executor);
+        return new MongoDatabaseImpl(name, codecRegistry, readPreference, writeConcern, readConcern, executor);
+    }
+
+    @Override
+    public MongoDatabase withReadConcern(final ReadConcern readConcern) {
+        return new MongoDatabaseImpl(name, codecRegistry, readPreference, writeConcern, readConcern, executor);
     }
 
     @Override
     public MongoIterable<String> listCollectionNames() {
-        return new ListCollectionsIterableImpl<BsonDocument>(name, BsonDocument.class, getDefaultCodecRegistry(), ReadPreference.primary(),
-                executor).map(new Function<BsonDocument, String>() {
+        return new ListCollectionsIterableImpl<BsonDocument>(name, BsonDocument.class, MongoClients.getDefaultCodecRegistry(),
+                                                             ReadPreference.primary(), executor).map(new Function<BsonDocument, String>() {
             @Override
             public String apply(final BsonDocument result) {
                 return result.getString("name").getValue();
@@ -114,7 +128,7 @@ class MongoDatabaseImpl implements MongoDatabase {
     @Override
     public <TDocument> MongoCollection<TDocument> getCollection(final String collectionName, final Class<TDocument> documentClass) {
         return new MongoCollectionImpl<TDocument>(new MongoNamespace(name, collectionName), documentClass, codecRegistry, readPreference,
-                                                  writeConcern, executor);
+                                                  writeConcern, readConcern, executor);
     }
 
     @Override
@@ -156,13 +170,29 @@ class MongoDatabaseImpl implements MongoDatabase {
     @Override
     public void createCollection(final String collectionName, final CreateCollectionOptions createCollectionOptions,
                                  final SingleResultCallback<Void> callback) {
-        executor.execute(new CreateCollectionOperation(name, collectionName)
-                         .capped(createCollectionOptions.isCapped())
-                         .sizeInBytes(createCollectionOptions.getSizeInBytes())
-                         .autoIndex(createCollectionOptions.isAutoIndex())
-                         .maxDocuments(createCollectionOptions.getMaxDocuments())
-                         .usePowerOf2Sizes(createCollectionOptions.isUsePowerOf2Sizes())
-                         .storageEngineOptions(toBsonDocument(createCollectionOptions.getStorageEngineOptions())), callback);
+        CreateCollectionOperation operation = new CreateCollectionOperation(name, collectionName)
+                .capped(createCollectionOptions.isCapped())
+                .sizeInBytes(createCollectionOptions.getSizeInBytes())
+                .autoIndex(createCollectionOptions.isAutoIndex())
+                .maxDocuments(createCollectionOptions.getMaxDocuments())
+                .usePowerOf2Sizes(createCollectionOptions.isUsePowerOf2Sizes())
+                .storageEngineOptions(toBsonDocument(createCollectionOptions.getStorageEngineOptions()));
+
+        IndexOptionDefaults indexOptionDefaults = createCollectionOptions.getIndexOptionDefaults();
+        if (indexOptionDefaults.getStorageEngine() != null) {
+            operation.indexOptionDefaults(new BsonDocument("storageEngine", toBsonDocument(indexOptionDefaults.getStorageEngine())));
+        }
+        ValidationOptions validationOptions = createCollectionOptions.getValidationOptions();
+        if (validationOptions.getValidator() != null) {
+            operation.validator(toBsonDocument(validationOptions.getValidator()));
+        }
+        if (validationOptions.getValidationLevel() != null) {
+            operation.validationLevel(validationOptions.getValidationLevel());
+        }
+        if (validationOptions.getValidationAction() != null) {
+            operation.validationAction(validationOptions.getValidationAction());
+        }
+        executor.execute(operation, callback);
     }
 
     private BsonDocument toBsonDocument(final Bson document) {

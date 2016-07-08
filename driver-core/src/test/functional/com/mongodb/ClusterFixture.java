@@ -49,16 +49,19 @@ import com.mongodb.operation.CommandWriteOperation;
 import com.mongodb.operation.DropDatabaseOperation;
 import org.bson.BsonDocument;
 import org.bson.BsonDocumentWrapper;
+import org.bson.BsonInt32;
 import org.bson.Document;
 import org.bson.codecs.BsonDocumentCodec;
 import org.bson.codecs.DocumentCodec;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import static com.mongodb.connection.ClusterConnectionMode.MULTIPLE;
 import static com.mongodb.connection.ClusterType.REPLICA_SET;
 import static com.mongodb.connection.ClusterType.SHARDED;
+import static com.mongodb.connection.ClusterType.STANDALONE;
 import static java.lang.Thread.sleep;
 import static java.util.Arrays.asList;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -98,11 +101,45 @@ public final class ClusterFixture {
         return getCluster().getDescription().getType() == clusterType;
     }
 
+    @SuppressWarnings("deprecation")
     public static ServerVersion getServerVersion() {
         return getCluster().getDescription().getAny().get(0).getVersion();
     }
 
     public static boolean serverVersionAtLeast(final List<Integer> versionArray) {
+        return getConnectedServerVersion().compareTo(new ServerVersion(versionArray)) >= 0;
+    }
+
+    public static Document getBuildInfo() {
+        return new CommandWriteOperation<Document>("admin", new BsonDocument("buildInfo", new BsonInt32(1)), new DocumentCodec())
+                .execute(getBinding());
+    }
+
+    public static Document getServerStatus() {
+        return new CommandWriteOperation<Document>("admin", new BsonDocument("serverStatus", new BsonInt32(1)), new DocumentCodec())
+               .execute(getBinding());
+    }
+
+    @SuppressWarnings("unchecked")
+    public static boolean isEnterpriseServer() {
+        Document buildInfo = getBuildInfo();
+        List<String> modules = Collections.emptyList();
+        if (buildInfo.containsKey("modules")) {
+            modules = (List<String>) buildInfo.get("modules");
+        }
+
+        return modules.contains("enterprise");
+    }
+
+    public static boolean supportsFsync() {
+        Document serverStatus = getServerStatus();
+        Document storageEngine = (Document) serverStatus.get("storageEngine");
+
+        return storageEngine != null && !storageEngine.get("name").equals("inMemory");
+    }
+
+    @SuppressWarnings("deprecation")
+    private static ServerVersion getConnectedServerVersion() {
         ClusterDescription clusterDescription = getCluster().getDescription();
         int retries = 0;
         while (clusterDescription.getAny().isEmpty() && retries <= 3) {
@@ -117,7 +154,7 @@ public final class ClusterFixture {
         if (clusterDescription.getAny().isEmpty()) {
             throw new RuntimeException("There are no servers available in " + clusterDescription);
         }
-        return clusterDescription.getAny().get(0).getVersion().compareTo(new ServerVersion(versionArray)) >= 0;
+        return clusterDescription.getAny().get(0).getVersion();
     }
 
     static class ShutdownHook extends Thread {
@@ -138,8 +175,16 @@ public final class ClusterFixture {
         return getBinding(getCluster());
     }
 
+    public static ReadWriteBinding getBinding(final ReadPreference readPreference) {
+        return getBinding(getCluster(), readPreference);
+    }
+
     public static ReadWriteBinding getBinding(final Cluster cluster) {
-        return new ClusterBinding(cluster, ReadPreference.primary());
+        return getBinding(cluster, ReadPreference.primary());
+    }
+
+    private static ReadWriteBinding getBinding(final Cluster cluster, final ReadPreference readPreference) {
+        return new ClusterBinding(cluster, readPreference);
     }
 
     public static SingleConnectionBinding getSingleConnectionBinding() {
@@ -158,8 +203,16 @@ public final class ClusterFixture {
         return getAsyncBinding(getAsyncCluster());
     }
 
+    public static AsyncReadWriteBinding getAsyncBinding(final ReadPreference readPreference) {
+        return getAsyncBinding(getAsyncCluster(), readPreference);
+    }
+
     public static AsyncReadWriteBinding getAsyncBinding(final Cluster cluster) {
-        return new AsyncClusterBinding(cluster, ReadPreference.primary());
+        return getAsyncBinding(cluster, ReadPreference.primary());
+    }
+
+    public static AsyncReadWriteBinding getAsyncBinding(final Cluster cluster, final ReadPreference readPreference) {
+        return new AsyncClusterBinding(cluster, readPreference);
     }
 
     public static synchronized Cluster getCluster() {
@@ -210,6 +263,7 @@ public final class ClusterFixture {
         return builder.build();
     }
 
+    @SuppressWarnings("deprecation")
     public static ServerAddress getPrimary() throws InterruptedException {
         List<ServerDescription> serverDescriptions = getCluster().getDescription().getPrimaries();
         while (serverDescriptions.isEmpty()) {
@@ -230,6 +284,10 @@ public final class ClusterFixture {
 
     public static boolean isSharded() {
         return getCluster().getDescription().getType() == SHARDED;
+    }
+
+    public static boolean isStandalone() {
+        return getCluster().getDescription().getType() == STANDALONE;
     }
 
     public static boolean isAuthenticated() {

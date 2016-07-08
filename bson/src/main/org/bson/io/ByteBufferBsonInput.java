@@ -16,11 +16,14 @@
 
 package org.bson.io;
 
+import org.bson.BsonSerializationException;
 import org.bson.ByteBuf;
 import org.bson.types.ObjectId;
 
 import java.nio.ByteOrder;
 import java.nio.charset.Charset;
+
+import static java.lang.String.format;
 
 /**
  * An implementation of {@code BsonInput} that is backed by a {@code ByteBuf}.
@@ -29,6 +32,14 @@ import java.nio.charset.Charset;
  */
 public class ByteBufferBsonInput implements BsonInput {
     private static final Charset UTF8_CHARSET = Charset.forName("UTF-8");
+
+    private static final String[] ONE_BYTE_ASCII_STRINGS = new String[Byte.MAX_VALUE + 1];
+
+    static {
+        for (int b = 0; b < ONE_BYTE_ASCII_STRINGS.length; b++) {
+            ONE_BYTE_ASCII_STRINGS[b] = String.valueOf((char) b);
+        }
+    }
 
     private ByteBuf buffer;
     private int mark = -1;
@@ -57,46 +68,43 @@ public class ByteBufferBsonInput implements BsonInput {
     @Override
     public byte readByte() {
         ensureOpen();
+        ensureAvailable(1);
         return buffer.get();
     }
 
     @Override
     public void readBytes(final byte[] bytes) {
         ensureOpen();
+        ensureAvailable(bytes.length);
         buffer.get(bytes);
     }
 
     @Override
     public void readBytes(final byte[] bytes, final int offset, final int length) {
         ensureOpen();
+        ensureAvailable(length);
         buffer.get(bytes, offset, length);
     }
 
     @Override
     public long readInt64() {
         ensureOpen();
+        ensureAvailable(8);
         return buffer.getLong();
     }
 
     @Override
     public double readDouble() {
         ensureOpen();
+        ensureAvailable(8);
         return buffer.getDouble();
     }
 
     @Override
     public int readInt32() {
         ensureOpen();
+        ensureAvailable(4);
         return buffer.getInt();
-    }
-
-    @Override
-    public String readString() {
-        ensureOpen();
-        int size = readInt32();
-        byte[] bytes = new byte[size];
-        readBytes(bytes);
-        return new String(bytes, 0, size - 1, UTF8_CHARSET);
     }
 
     @Override
@@ -108,25 +116,51 @@ public class ByteBufferBsonInput implements BsonInput {
     }
 
     @Override
+    public String readString() {
+        ensureOpen();
+        int size = readInt32();
+        if (size <= 0) {
+            throw new BsonSerializationException(format("While decoding a BSON string found a size that is not a positive number: %d",
+                                                        size));
+        }
+        return readString(size);
+    }
+
+    @Override
     public String readCString() {
         ensureOpen();
 
         // TODO: potentially optimize this
         int mark = buffer.position();
         readUntilNullByte();
-        int size = buffer.position() - mark - 1;
+        int size = buffer.position() - mark;
         buffer.position(mark);
 
-        byte[] bytes = new byte[size];
-        readBytes(bytes);
-        readByte();  // read the trailing null byte
+        return readString(size);
+    }
 
-        return new String(bytes, UTF8_CHARSET);
+    private String readString(final int size) {
+        if (size == 2) {
+            byte asciiByte = readByte();               // if only one byte in the string, it must be ascii.
+            readByte();                                // read null terminator
+            if (asciiByte < 0) {
+                return UTF8_CHARSET.newDecoder().replacement();
+            }
+            return ONE_BYTE_ASCII_STRINGS[asciiByte];  // this will throw if asciiByte is negative
+        } else {
+            byte[] bytes = new byte[size - 1];
+            readBytes(bytes);
+            byte nullByte = readByte();
+            if (nullByte != 0) {
+                throw new BsonSerializationException("Found a BSON string that is not null-terminated");
+            }
+            return new String(bytes, UTF8_CHARSET);
+        }
     }
 
     private void readUntilNullByte() {
         //CHECKSTYLE:OFF
-        while (buffer.get() != 0) { //NOPMD
+        while (readByte() != 0) { //NOPMD
             //do nothing - checkstyle & PMD hate this, not surprisingly
         }
         //CHECKSTYLE:ON
@@ -174,6 +208,12 @@ public class ByteBufferBsonInput implements BsonInput {
     private void ensureOpen() {
         if (buffer == null) {
             throw new IllegalStateException("Stream is closed");
+        }
+    }
+    private void ensureAvailable(final int bytesNeeded) {
+        if (buffer.remaining() < bytesNeeded) {
+            throw new BsonSerializationException(format("While decoding a BSON document %d bytes were required, "
+                                                        + "but only %d remain", bytesNeeded, buffer.remaining()));
         }
     }
 }

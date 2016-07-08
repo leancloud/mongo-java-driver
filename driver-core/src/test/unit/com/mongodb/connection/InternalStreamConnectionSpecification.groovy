@@ -17,7 +17,7 @@
 package com.mongodb.connection
 
 import category.Async
-import category.Slow
+import category.SlowUnit
 import com.mongodb.MongoInternalException
 import com.mongodb.MongoNamespace
 import com.mongodb.MongoSocketClosedException
@@ -188,7 +188,6 @@ class InternalStreamConnectionSpecification extends Specification {
                 latch.countDown();
             }
         })
-        latch.countDown();
         latch.await()
 
         then:
@@ -427,6 +426,38 @@ class InternalStreamConnectionSpecification extends Specification {
         thrown MongoSocketClosedException
     }
 
+    def 'should throw MongoInternalException when reply header message length > max message length'() {
+        given:
+        stream.read(36) >> { helper.headerWithMessageSizeGreaterThanMax(1) }
+
+        def connection = getOpenedConnection()
+
+        when:
+        connection.receiveMessage(1)
+
+        then:
+        thrown(MongoInternalException)
+        connection.isClosed()
+    }
+
+    def 'should throw MongoInternalException when reply header message length > max message length asynchronously'() {
+        given:
+        stream.readAsync(36, _) >> { int numBytes, AsyncCompletionHandler<ByteBuf> handler ->
+            handler.completed(helper.headerWithMessageSizeGreaterThanMax(1))
+        }
+
+        def connection = getOpenedConnection()
+        def callback = new FutureResultCallback()
+
+        when:
+        connection.receiveMessageAsync(1, callback)
+        callback.get()
+
+        then:
+        thrown(MongoInternalException)
+        connection.isClosed()
+    }
+
     @Category(Async)
     @IgnoreIf({ javaVersion < 1.7 })
     def 'should close the stream when reading the message header throws an exception asynchronously'() {
@@ -577,7 +608,8 @@ class InternalStreamConnectionSpecification extends Specification {
         }
     }
 
-    @Category(Slow)
+    @IgnoreIf({ System.getProperty('ignoreSlowUnitTests') == 'true' })
+    @Category(SlowUnit)
     def 'should have threadsafe connection pipelining'() {
         given:
         int threads = 10
@@ -612,8 +644,8 @@ class InternalStreamConnectionSpecification extends Specification {
         pool.shutdown()
     }
 
-    @Category([Async, Slow])
-    @IgnoreIf({ javaVersion < 1.7 })
+    @Category([Async, SlowUnit])
+    @IgnoreIf({ System.getProperty('ignoreSlowUnitTests') == 'true' || javaVersion < 1.7 })
     def 'should have threadsafe connection pipelining asynchronously'() {
         given:
         int threads = 10
@@ -704,6 +736,22 @@ class InternalStreamConnectionSpecification extends Specification {
             ByteBuffer headerByteBuffer = ByteBuffer.allocate(36).with {
                 order(ByteOrder.LITTLE_ENDIAN);
                 putInt(110);           // messageLength
+                putInt(4);             // requestId
+                putInt(messageId);     // responseTo
+                putInt(1);             // opCode
+                putInt(0);             // responseFlags
+                putLong(0);            // cursorId
+                putInt(0);             // starting from
+                putInt(1);             // number returned
+            }
+            headerByteBuffer.flip()
+            new ByteBufNIO(headerByteBuffer)
+        }
+
+        def headerWithMessageSizeGreaterThanMax(messageId) {
+            ByteBuffer headerByteBuffer = ByteBuffer.allocate(36).with {
+                order(ByteOrder.LITTLE_ENDIAN);
+                putInt(connectionDescription.maxMessageSize + 1);   // messageLength
                 putInt(4);             // requestId
                 putInt(messageId);     // responseTo
                 putInt(1);             // opCode

@@ -87,7 +87,15 @@ public class BsonBinaryReader extends AbstractBsonReader {
             throwInvalidState("ReadBSONType", State.TYPE);
         }
 
-        setCurrentBsonType(BsonType.findByValue(bsonInput.readByte()));
+        byte bsonTypeByte = bsonInput.readByte();
+        BsonType bsonType = BsonType.findByValue(bsonTypeByte);
+        if (bsonType == null) {
+            String name = bsonInput.readCString();
+            throw new BsonSerializationException(format("Detected unknown BSON type \"\\x%x\" for fieldname \"%s\". "
+                    + "Are you using the latest driver version?",
+                    bsonTypeByte, name));
+        }
+        setCurrentBsonType(bsonType);
 
         if (getCurrentBsonType() == BsonType.END_OF_DOCUMENT) {
             switch (getContext().getContextType()) {
@@ -123,7 +131,7 @@ public class BsonBinaryReader extends AbstractBsonReader {
 
     @Override
     protected BsonBinary doReadBinaryData() {
-        int numBytes = bsonInput.readInt32();
+        int numBytes = readSize();
         byte type = bsonInput.readByte();
 
         if (type == BsonBinarySubType.OLD_BINARY.getValue()) {
@@ -138,7 +146,7 @@ public class BsonBinaryReader extends AbstractBsonReader {
     @Override
     protected byte doPeekBinarySubType() {
         mark();
-        bsonInput.readInt32();
+        readSize();
         byte type = bsonInput.readByte();
         reset();
         return type;
@@ -146,7 +154,11 @@ public class BsonBinaryReader extends AbstractBsonReader {
 
     @Override
     protected boolean doReadBoolean() {
-        return bsonInput.readByte() == 0x1;
+        byte booleanByte = bsonInput.readByte();
+        if (booleanByte != 0 && booleanByte != 1) {
+           throw new BsonSerializationException(format("Expected a boolean value but found %d", booleanByte));
+        }
+        return booleanByte == 0x1;
     }
 
     @Override
@@ -371,8 +383,8 @@ public class BsonBinaryReader extends AbstractBsonReader {
     }
 
     protected class Mark extends AbstractBsonReader.Mark {
-        private int startPosition;
-        private int size;
+        private final int startPosition;
+        private final int size;
 
         protected Mark() {
             super();

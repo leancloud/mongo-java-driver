@@ -28,12 +28,14 @@ dependencies {
     compile project(':bson')
     compile project(':driver-core')
 
+    testCompile project(':bson').sourceSets.test.output
     testCompile project(':driver-core').sourceSets.test.output
 }
 
 clirr {
     excludeFilter = new File("$configDir/clirr-exclude.yml")
-    baseline 'org.mongodb:mongodb-driver-async:3.0.0'
+    baseline 'org.mongodb:mongodb-driver-async:3.2.0'
+    failOnErrors = false
 }
 
 tasks.withType(Checkstyle) {

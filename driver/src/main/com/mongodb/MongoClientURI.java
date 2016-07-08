@@ -18,6 +18,8 @@ package com.mongodb;
 
 import java.util.List;
 
+import static com.mongodb.assertions.Assertions.notNull;
+
 /**
  * Represents a <a href="http://www.mongodb.org/display/DOCS/Connections">URI</a>
  * which can be used to create a MongoClient instance. The URI describes the hosts to
@@ -42,6 +44,18 @@ import java.util.List;
  * </ul>
  * <p>The following options are supported (case insensitive):</p>
  *
+ * <p>Server Selection Configuration:</p>
+ * <ul>
+ * <li>{@code serverSelectionTimeoutMS=ms}: How long the driver will wait for server selection to succeed before throwing an exception.</li>
+ * <li>{@code localThresholdMS=ms}: When choosing among multiple MongoDB servers to send a request, the driver will only
+ * send that request to a server whose ping time is less than or equal to the server with the fastest ping time plus the local
+ * threshold.</li>
+ * </ul>
+ * <p>Server Monitoring Configuration:</p>
+ * <ul>
+ * <li>{@code heartbeatFrequencyMS=ms}: The frequency that the driver will attempt to determine the current state of each server in the
+ * cluster.</li>
+ * </ul>
  * <p>Replica set configuration:</p>
  * <ul>
  * <li>{@code replicaSet=name}: Implies that the hosts given are a seed list, and the driver will attempt to find
@@ -51,6 +65,7 @@ import java.util.List;
  * <p>Connection Configuration:</p>
  * <ul>
  * <li>{@code ssl=true|false}: Whether to connect using SSL.</li>
+ * <li>{@code sslInvalidHostNameAllowed=true|false}: Whether to allow invalid host names for SSL connections.</li>
  * <li>{@code connectTimeoutMS=ms}: How long a connection can take to be opened before timing out.</li>
  * <li>{@code socketTimeoutMS=ms}: How long a send or receive on a socket can take before timing out.</li>
  * </ul>
@@ -74,6 +89,12 @@ import java.util.List;
  *          <li>{@code false}: the driver does not send a getLastError command after every update.</li>
  *      </ul>
  *  </li>
+ * <li>{@code journal=true|false}
+ *  <ul>
+ *      <li>{@code true}: the driver waits for the server to group commit to the journal file on disk.</li>
+ *      <li>{@code false}: the driver does not wait for the server to group commit to the journal file on disk.</li>
+ *  </ul>
+ * </li>
  *  <li>{@code w=wValue}
  *      <ul>
  *          <li>The driver adds { w : wValue } to the getLastError command. Implies {@code safe=true}.</li>
@@ -154,12 +175,17 @@ public class MongoClientURI {
      * Creates a MongoURI from the given URI string, and MongoClientOptions.Builder.  The builder can be configured with default options,
      * which may be overridden by options specified in the URI string.
      *
+     * <p>
+     * The {@code MongoClientURI} takes ownership of the {@code MongoClientOptions.Builder} instance that is passed to this constructor,
+     * and may modify it.
+     * </p>
+     *
      * @param uri     the URI
-     * @param builder a Builder
+     * @param builder a non-null Builder, which may be modified within this constructor,
      * @since 2.11.0
      */
     public MongoClientURI(final String uri, final MongoClientOptions.Builder builder) {
-        this.builder = builder;
+        this.builder = notNull("builder", builder);
         proxied = new ConnectionString(uri);
     }
 
@@ -218,7 +244,7 @@ public class MongoClientURI {
      * @return the URI
      */
     public String getURI() {
-        return proxied.getURI();
+        return proxied.getConnectionString();
     }
 
     /**
@@ -242,6 +268,9 @@ public class MongoClientURI {
     public MongoClientOptions getOptions() {
         if (proxied.getReadPreference() != null) {
             builder.readPreference(proxied.getReadPreference());
+        }
+        if (proxied.getReadConcern() != null) {
+            builder.readConcern(proxied.getReadConcern());
         }
         if (proxied.getWriteConcern() != null) {
             builder.writeConcern(proxied.getWriteConcern());
@@ -275,6 +304,18 @@ public class MongoClientURI {
         }
         if (proxied.getSslEnabled() != null) {
             builder.sslEnabled(proxied.getSslEnabled());
+        }
+        if (proxied.getSslInvalidHostnameAllowed() != null) {
+            builder.sslInvalidHostNameAllowed(proxied.getSslInvalidHostnameAllowed());
+        }
+        if (proxied.getServerSelectionTimeout() != null) {
+            builder.serverSelectionTimeout(proxied.getServerSelectionTimeout());
+        }
+        if (proxied.getLocalThreshold() != null) {
+            builder.localThreshold(proxied.getLocalThreshold());
+        }
+        if (proxied.getHeartbeatFrequency() != null) {
+            builder.heartbeatFrequency(proxied.getHeartbeatFrequency());
         }
 
         return builder.build();

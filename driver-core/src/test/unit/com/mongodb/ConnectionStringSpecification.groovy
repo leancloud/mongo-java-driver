@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 - 2014 MongoDB, Inc.
+ * Copyright (c) 2008-2014 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,17 +25,12 @@ import static com.mongodb.MongoCredential.createMongoCRCredential
 import static com.mongodb.MongoCredential.createMongoX509Credential
 import static com.mongodb.MongoCredential.createPlainCredential
 import static com.mongodb.MongoCredential.createScramSha1Credential
+import static com.mongodb.ReadPreference.primary
 import static com.mongodb.ReadPreference.secondaryPreferred
 import static java.util.Arrays.asList
+import static java.util.concurrent.TimeUnit.MILLISECONDS
 
 class ConnectionStringSpecification extends Specification {
-    def 'should throw Exception if URI does not have a trailing slash'() {
-        when:
-        new ConnectionString('mongodb://localhost?wTimeout=5');
-
-        then:
-        thrown(IllegalArgumentException)
-    }
 
     @Unroll
     def 'should parse #connectionString into correct components'() {
@@ -89,10 +84,11 @@ class ConnectionStringSpecification extends Specification {
         new ConnectionString('mongodb://localhost')                                          | null
         new ConnectionString('mongodb://localhost/?safe=true')                               | WriteConcern.ACKNOWLEDGED
         new ConnectionString('mongodb://localhost/?safe=false')                              | WriteConcern.UNACKNOWLEDGED
-        new ConnectionString('mongodb://localhost/?wTimeout=5')                              | new WriteConcern(1, 5, false, false)
-        new ConnectionString('mongodb://localhost/?fsync=true')                              | new WriteConcern(1, 0, true, false)
-        new ConnectionString('mongodb://localhost/?j=true')                                  | new WriteConcern(1, 0, false, true)
-        new ConnectionString('mongodb://localhost/?w=2&wtimeout=5&fsync=true&j=true')        | new WriteConcern(2, 5, true, true)
+        new ConnectionString('mongodb://localhost/?wTimeout=5')                              | WriteConcern.ACKNOWLEDGED
+                                                                                                           .withWTimeout(5, MILLISECONDS)
+        new ConnectionString('mongodb://localhost/?fsync=true')                              | WriteConcern.ACKNOWLEDGED.withFsync(true)
+        new ConnectionString('mongodb://localhost/?journal=true')                            | WriteConcern.ACKNOWLEDGED.withJournal(true)
+        new ConnectionString('mongodb://localhost/?w=2&wtimeout=5&fsync=true&journal=true')  | new WriteConcern(2, 5, true, true)
         new ConnectionString('mongodb://localhost/?w=majority&wtimeout=5&fsync=true&j=true') | new WriteConcern('majority', 5, true, true)
     }
 
@@ -108,27 +104,74 @@ class ConnectionStringSpecification extends Specification {
         connectionString.getConnectTimeout() == 2500;
         connectionString.getSocketTimeout() == 5500;
         connectionString.getWriteConcern() == new WriteConcern(1, 2500, true);
-        connectionString.getReadPreference() == ReadPreference.primary() ;
+        connectionString.getReadPreference() == primary() ;
         connectionString.getRequiredReplicaSetName() == 'test'
         connectionString.getSslEnabled()
+        connectionString.getSslInvalidHostnameAllowed()
+        connectionString.getServerSelectionTimeout() == 25000
+        connectionString.getLocalThreshold() == 30
+        connectionString.getHeartbeatFrequency() == 20000
+        connectionString.getStreamType() == 'netty'
 
         where:
         connectionString <<
                 [new ConnectionString('mongodb://localhost/?minPoolSize=5&maxPoolSize=10&waitQueueMultiple=7&waitQueueTimeoutMS=150&'
                                             + 'maxIdleTimeMS=200&maxLifeTimeMS=300&replicaSet=test&'
                                             + 'connectTimeoutMS=2500&socketTimeoutMS=5500&'
-                                            + 'safe=false&w=1&wtimeout=2500&fsync=true&readPreference=primary&ssl=true'),
+                                            + 'safe=false&w=1&wtimeout=2500&fsync=true&readPreference=primary&ssl=true&streamType=netty&'
+                                            + 'sslInvalidHostNameAllowed=true&'
+                                            + 'serverSelectionTimeoutMS=25000&'
+                                            + 'localThresholdMS=30&'
+                                            + 'heartbeatFrequencyMS=20000'),
                  new ConnectionString('mongodb://localhost/?minPoolSize=5;maxPoolSize=10;waitQueueMultiple=7;waitQueueTimeoutMS=150;'
                                             + 'maxIdleTimeMS=200;maxLifeTimeMS=300;replicaSet=test;'
                                             + 'connectTimeoutMS=2500;socketTimeoutMS=5500;'
-                                            + 'safe=false;w=1;wtimeout=2500;fsync=true;readPreference=primary;ssl=true'),
+                                            + 'safe=false;w=1;wtimeout=2500;fsync=true;readPreference=primary;ssl=true;streamType=netty;'
+                                            + 'sslInvalidHostNameAllowed=true;'
+                                            + 'serverSelectionTimeoutMS=25000;'
+                                            + 'localThresholdMS=30;'
+                                            + 'heartbeatFrequencyMS=20000'),
                  new ConnectionString('mongodb://localhost/test?minPoolSize=5;maxPoolSize=10&waitQueueMultiple=7;waitQueueTimeoutMS=150;'
                                             + 'maxIdleTimeMS=200&maxLifeTimeMS=300&replicaSet=test;'
                                             + 'connectTimeoutMS=2500;'
                                             + 'socketTimeoutMS=5500&'
-                                            + 'safe=false&w=1;wtimeout=2500;fsync=true&readPreference=primary;ssl=true')]
+                                            + 'safe=false&w=1;wtimeout=2500;fsync=true&readPreference=primary;ssl=true&streamType=netty;'
+                                            + 'sslInvalidHostNameAllowed=true;'
+                                            + 'serverSelectionTimeoutMS=25000&'
+                                            + 'localThresholdMS=30;'
+                                            + 'heartbeatFrequencyMS=20000')]
         //for documentation, i.e. the Unroll description for each type
         type << ['amp', 'semi', 'mixed']
+    }
+
+    @Unroll
+    def 'should throw Exception when the string #cause'() {
+        when:
+        new ConnectionString(connectionString);
+
+        then:
+        thrown(IllegalArgumentException)
+
+        where:
+
+        cause                                       | connectionString
+        'is not a connection string'                | 'hello world'
+        'is a unix socket'                          | 'mongodb://%2Ftmp%2Fmongodb-27017.sock'
+        'is missing a host'                         | 'mongodb://'
+        'has an empty host'                         | 'mongodb://localhost:27017,,localhost:27019'
+        'has an malformed IPv6 host'                | 'mongodb://[::1'
+        'has unescaped colons'                      | 'mongodb://locahost::1'
+        'is missing a slash'                        | 'mongodb://localhost?wTimeout=5'
+        'contains an invalid port string'           | 'mongodb://localhost:twenty'
+        'contains an invalid port negative'         | 'mongodb://localhost:-1'
+        'contains an invalid port out of range'     | 'mongodb://localhost:1000000'
+        'contains multiple at-signs'                | 'mongodb://user@123:password@localhost'
+        'contains multiple colons'                  | 'mongodb://user:123:password@localhost'
+        'invalid integer in options'                | 'mongodb://localhost/?wTimeout=five'
+        'has incomplete options'                    | 'mongodb://localhost/?wTimeout'
+        'has an unknown auth mechanism'             | 'mongodb://user:password@localhost/?authMechanism=postItNote'
+        'invalid readConcern'                       | 'mongodb://localhost:27017/?readConcernLevel=pickThree'
+
     }
 
     def 'should have correct defaults for options'() {
@@ -142,9 +185,11 @@ class ConnectionStringSpecification extends Specification {
         connectionString.getConnectTimeout() == null;
         connectionString.getSocketTimeout() == null;
         connectionString.getWriteConcern() == null;
+        connectionString.getReadConcern() == null;
         connectionString.getReadPreference() == null;
         connectionString.getRequiredReplicaSetName() == null
         connectionString.getSslEnabled() == null
+        connectionString.getStreamType() == null
     }
 
     @Unroll
@@ -230,6 +275,7 @@ class ConnectionStringSpecification extends Specification {
         new ConnectionString('mongodb://localhost/' +
                                    '?readPreference=secondaryPreferred') | secondaryPreferred()
         new ConnectionString('mongodb://localhost/?slaveOk=true')        | secondaryPreferred()
+        new ConnectionString('mongodb://localhost/?slaveOk=false')       | primary()
         new ConnectionString('mongodb://localhost/' +
                                    '?readPreference=secondaryPreferred' +
                                    '&readPreferenceTags=dc:ny,rack:1' +
@@ -238,6 +284,18 @@ class ConnectionStringSpecification extends Specification {
                                                                                                                  new Tag('rack', '1'))),
                                                                                                new TagSet(asList(new Tag('dc', 'ny'))),
                                                                                                new TagSet()])
+    }
+
+    @Unroll
+    def 'should correct parse read concern for #readConcern'() {
+        expect:
+        uri.getReadConcern() == readConcern;
+
+        where:
+        uri                                                                     | readConcern
+        new ConnectionString('mongodb://localhost/')                            | null
+        new ConnectionString('mongodb://localhost/?readConcernLevel=local')     | ReadConcern.LOCAL
+        new ConnectionString('mongodb://localhost/?readConcernLevel=majority')  | ReadConcern.MAJORITY
     }
 
     def 'should be equal to another instance with the same string values'() {

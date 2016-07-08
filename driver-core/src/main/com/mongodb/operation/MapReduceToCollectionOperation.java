@@ -17,11 +17,15 @@
 package com.mongodb.operation;
 
 import com.mongodb.ExplainVerbosity;
-import com.mongodb.Function;
 import com.mongodb.MongoNamespace;
+import com.mongodb.ServerAddress;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.binding.AsyncWriteBinding;
 import com.mongodb.binding.WriteBinding;
+import com.mongodb.connection.AsyncConnection;
+import com.mongodb.connection.Connection;
+import com.mongodb.connection.ConnectionDescription;
+import com.mongodb.operation.CommandOperationHelper.CommandTransformer;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
 import org.bson.BsonJavaScript;
@@ -35,10 +39,15 @@ import java.util.concurrent.TimeUnit;
 
 import static com.mongodb.assertions.Assertions.isTrue;
 import static com.mongodb.assertions.Assertions.notNull;
+import static com.mongodb.internal.async.ErrorHandlingResultCallback.errorHandlingCallback;
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocol;
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocolAsync;
 import static com.mongodb.operation.DocumentHelper.putIfNotZero;
 import static com.mongodb.operation.DocumentHelper.putIfTrue;
+import static com.mongodb.operation.OperationHelper.LOGGER;
+import static com.mongodb.operation.OperationHelper.releasingCallback;
+import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionThreeDotTwo;
+import static com.mongodb.operation.OperationHelper.withConnection;
 import static java.util.Arrays.asList;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -52,7 +61,8 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
  * @mongodb.driver.manual core/map-reduce Map Reduce
  * @since 3.0
  */
-public class MapReduceToCollectionOperation implements AsyncWriteOperation<MapReduceStatistics>, WriteOperation<MapReduceStatistics> {
+public class
+MapReduceToCollectionOperation implements AsyncWriteOperation<MapReduceStatistics>, WriteOperation<MapReduceStatistics> {
     private final MongoNamespace namespace;
     private final BsonJavaScript mapFunction;
     private final BsonJavaScript reduceFunction;
@@ -69,6 +79,7 @@ public class MapReduceToCollectionOperation implements AsyncWriteOperation<MapRe
     private String databaseName;
     private boolean sharded;
     private boolean nonAtomic;
+    private Boolean bypassDocumentValidation;
     private static final List<String> VALID_ACTIONS = asList("replace", "merge", "reduce");
 
     /**
@@ -389,6 +400,32 @@ public class MapReduceToCollectionOperation implements AsyncWriteOperation<MapRe
     }
 
     /**
+     * Gets the bypass document level validation flag
+     *
+     * @return the bypass document level validation flag
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     */
+    public Boolean getBypassDocumentValidation() {
+        return bypassDocumentValidation;
+    }
+
+    /**
+     * Sets the bypass document level validation flag.
+     *
+     * <p>Note: This only applies when an $out stage is specified</p>.
+     *
+     * @param bypassDocumentValidation If true, allows the write to opt-out of document level validation.
+     * @return this
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     */
+    public MapReduceToCollectionOperation bypassDocumentValidation(final Boolean bypassDocumentValidation) {
+        this.bypassDocumentValidation = bypassDocumentValidation;
+        return this;
+    }
+
+    /**
      * Executing this will return a cursor with your results in.
      *
      * @param binding the binding
@@ -396,12 +433,29 @@ public class MapReduceToCollectionOperation implements AsyncWriteOperation<MapRe
      */
     @Override
     public MapReduceStatistics execute(final WriteBinding binding) {
-        return executeWrappedCommandProtocol(namespace.getDatabaseName(), getCommand(), binding, transformer());
+        return withConnection(binding, new OperationHelper.CallableWithConnection<MapReduceStatistics>() {
+            @Override
+            public MapReduceStatistics call(final Connection connection) {
+                return executeWrappedCommandProtocol(binding, namespace.getDatabaseName(), getCommand(connection.getDescription()),
+                        connection, transformer());
+            }
+        });
     }
 
     @Override
     public void executeAsync(final AsyncWriteBinding binding, final SingleResultCallback<MapReduceStatistics> callback) {
-        executeWrappedCommandProtocolAsync(namespace.getDatabaseName(), getCommand(), binding, transformer(), callback);
+        withConnection(binding, new OperationHelper.AsyncCallableWithConnection() {
+            @Override
+            public void call(final AsyncConnection connection, final Throwable t) {
+                SingleResultCallback<MapReduceStatistics> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
+                if (t != null) {
+                    errHandlingCallback.onResult(null, t);
+                } else {
+                    executeWrappedCommandProtocolAsync(binding, namespace.getDatabaseName(), getCommand(connection.getDescription()),
+                            connection, transformer(), releasingCallback(errHandlingCallback, connection));
+                }
+            }
+        });
     }
 
     /**
@@ -426,21 +480,21 @@ public class MapReduceToCollectionOperation implements AsyncWriteOperation<MapRe
 
     private CommandReadOperation<BsonDocument> createExplainableOperation(final ExplainVerbosity explainVerbosity) {
         return new CommandReadOperation<BsonDocument>(namespace.getDatabaseName(),
-                                                      ExplainHelper.asExplainCommand(getCommand(), explainVerbosity),
+                                                      ExplainHelper.asExplainCommand(getCommand(null), explainVerbosity),
                                                       new BsonDocumentCodec());
     }
 
-    private Function<BsonDocument, MapReduceStatistics> transformer() {
-        return new Function<BsonDocument, MapReduceStatistics>() {
+    private CommandTransformer<BsonDocument, MapReduceStatistics> transformer() {
+        return new CommandTransformer<BsonDocument, MapReduceStatistics>() {
             @SuppressWarnings("unchecked")
             @Override
-            public MapReduceStatistics apply(final BsonDocument result) {
+            public MapReduceStatistics apply(final BsonDocument result, final ServerAddress serverAddress) {
                 return MapReduceHelper.createStatistics(result);
             }
         };
     }
 
-    private BsonDocument getCommand() {
+    private BsonDocument getCommand(final ConnectionDescription description) {
         BsonDocument outputDocument = new BsonDocument(getAction(), new BsonString(getCollectionName()));
         outputDocument.append("sharded", BsonBoolean.valueOf(isSharded()));
         outputDocument.append("nonAtomic", BsonBoolean.valueOf(isNonAtomic()));
@@ -460,6 +514,9 @@ public class MapReduceToCollectionOperation implements AsyncWriteOperation<MapRe
         putIfNotZero(commandDocument, "limit", getLimit());
         putIfNotZero(commandDocument, "maxTimeMS", getMaxTime(MILLISECONDS));
         putIfTrue(commandDocument, "jsMode", isJsMode());
+        if (bypassDocumentValidation != null && description != null && serverIsAtLeastVersionThreeDotTwo(description)) {
+            commandDocument.put("bypassDocumentValidation", BsonBoolean.valueOf(bypassDocumentValidation));
+        }
         return commandDocument;
     }
 

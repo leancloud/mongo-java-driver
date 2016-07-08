@@ -121,7 +121,7 @@
 
         <module name="MethodLength"/>
         <module name="ParameterNumber">
-            <property name="max" value="10"/>
+            <property name="max" value="11"/>
         </module>
 
 
@@ -219,7 +219,7 @@
     </module>
     <module name="SuppressionCommentFilter"/>
     <module name="SuppressionFilter">
-        <property name="file" value="config/checkstyle-exclude.xml"/>
+        <property name="file" value="${checkstyleConfigDir}/checkstyle-exclude.xml"/>
     </module>
 
 </module>

@@ -20,6 +20,7 @@ import com.mongodb.Block;
 import com.mongodb.CursorType;
 import com.mongodb.Function;
 import com.mongodb.MongoNamespace;
+import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
 import com.mongodb.async.AsyncBatchCursor;
 import com.mongodb.async.SingleResultCallback;
@@ -41,19 +42,21 @@ class FindIterableImpl<TDocument, TResult> implements FindIterable<TResult> {
     private final Class<TDocument> documentClass;
     private final Class<TResult> resultClass;
     private final ReadPreference readPreference;
+    private final ReadConcern readConcern;
     private final CodecRegistry codecRegistry;
     private final AsyncOperationExecutor executor;
     private final FindOptions findOptions;
     private Bson filter;
 
     FindIterableImpl(final MongoNamespace namespace, final Class<TDocument> documentClass, final Class<TResult> resultClass,
-                     final CodecRegistry codecRegistry, final ReadPreference readPreference, final AsyncOperationExecutor executor,
-                     final Bson filter, final FindOptions findOptions) {
+                     final CodecRegistry codecRegistry, final ReadPreference readPreference, final ReadConcern readConcern,
+                     final AsyncOperationExecutor executor, final Bson filter, final FindOptions findOptions) {
         this.namespace = notNull("namespace", namespace);
         this.documentClass = notNull("documentClass", documentClass);
         this.resultClass = notNull("resultClass", resultClass);
         this.codecRegistry = notNull("codecRegistry", codecRegistry);
         this.readPreference = notNull("readPreference", readPreference);
+        this.readConcern = notNull("readConcern", readConcern);
         this.executor = notNull("executor", executor);
         this.filter = notNull("filter", filter);
         this.findOptions = notNull("findOptions", findOptions);
@@ -81,6 +84,13 @@ class FindIterableImpl<TDocument, TResult> implements FindIterable<TResult> {
     public FindIterable<TResult> maxTime(final long maxTime, final TimeUnit timeUnit) {
         notNull("timeUnit", timeUnit);
         findOptions.maxTime(maxTime, timeUnit);
+        return this;
+    }
+
+    @Override
+    public FindIterable<TResult> maxAwaitTime(final long maxAwaitTime, final TimeUnit timeUnit) {
+        notNull("timeUnit", timeUnit);
+        findOptions.maxAwaitTime(maxAwaitTime, timeUnit);
         return this;
     }
 
@@ -134,16 +144,21 @@ class FindIterableImpl<TDocument, TResult> implements FindIterable<TResult> {
 
     @Override
     public void first(final SingleResultCallback<TResult> callback) {
+        notNull("callback", callback);
         execute(createQueryOperation().batchSize(0).limit(-1)).first(callback);
     }
 
     @Override
     public void forEach(final Block<? super TResult> block, final SingleResultCallback<Void> callback) {
+        notNull("block", block);
+        notNull("callback", callback);
         execute().forEach(block, callback);
     }
 
     @Override
     public <A extends Collection<? super TResult>> void into(final A target, final SingleResultCallback<A> callback) {
+        notNull("target", target);
+        notNull("callback", callback);
         execute().into(target, callback);
     }
 
@@ -154,6 +169,7 @@ class FindIterableImpl<TDocument, TResult> implements FindIterable<TResult> {
 
     @Override
     public void batchCursor(final SingleResultCallback<AsyncBatchCursor<TResult>> callback) {
+        notNull("callback", callback);
         execute().batchCursor(callback);
     }
 
@@ -172,6 +188,7 @@ class FindIterableImpl<TDocument, TResult> implements FindIterable<TResult> {
                .skip(findOptions.getSkip())
                .limit(findOptions.getLimit())
                .maxTime(findOptions.getMaxTime(MILLISECONDS), MILLISECONDS)
+               .maxAwaitTime(findOptions.getMaxAwaitTime(MILLISECONDS), MILLISECONDS)
                .modifiers(toBsonDocument(findOptions.getModifiers()))
                .projection(toBsonDocument(findOptions.getProjection()))
                .sort(toBsonDocument(findOptions.getSort()))
@@ -179,7 +196,8 @@ class FindIterableImpl<TDocument, TResult> implements FindIterable<TResult> {
                .noCursorTimeout(findOptions.isNoCursorTimeout())
                .oplogReplay(findOptions.isOplogReplay())
                .partial(findOptions.isPartial())
-               .slaveOk(readPreference.isSlaveOk());
+               .slaveOk(readPreference.isSlaveOk())
+               .readConcern(readConcern);
     }
 
     private BsonDocument toBsonDocument(final Bson document) {

@@ -18,6 +18,8 @@ package com.mongodb;
 
 import com.mongodb.util.JSON;
 import org.bson.BasicBSONObject;
+import org.bson.json.JsonMode;
+import org.bson.json.JsonWriterSettings;
 import org.bson.types.ObjectId;
 import org.junit.Test;
 
@@ -26,6 +28,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.TreeMap;
 
+import static com.mongodb.MongoClient.getDefaultCodecRegistry;
 import static java.util.Arrays.asList;
 import static org.hamcrest.CoreMatchers.not;
 import static org.junit.Assert.assertEquals;
@@ -34,6 +37,33 @@ import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 
 public class BasicDBObjectTest {
+
+    @Test
+    public void testParse() {
+        BasicDBObject document = BasicDBObject.parse("{ 'int' : 1, 'string' : 'abc' }");
+        assertEquals(new BasicDBObject("int", 1).append("string", "abc"), document);
+
+        document = BasicDBObject.parse("{ 'int' : 1, 'string' : 'abc' }", getDefaultCodecRegistry().get(BasicDBObject.class));
+        assertEquals(new BasicDBObject("int", 1).append("string", "abc"), document);
+
+        document = BasicDBObject.parse("{_id : ObjectId('5524094c2cf8fb61dede210c')}");
+        assertEquals(new BasicDBObject("_id", new ObjectId("5524094c2cf8fb61dede210c")), document);
+    }
+
+    @Test
+    public void testToJson() {
+        BasicDBObject doc = new BasicDBObject("_id", new ObjectId("5522d5d12cf8fb556a991f45")).append("int", 1).append("string", "abc");
+
+        assertEquals("{ \"_id\" : { \"$oid\" : \"5522d5d12cf8fb556a991f45\" }, \"int\" : 1, \"string\" : \"abc\" }", doc.toJson());
+        assertEquals("{ \"_id\" : ObjectId(\"5522d5d12cf8fb556a991f45\"), \"int\" : 1, \"string\" : \"abc\" }",
+                     doc.toJson(new JsonWriterSettings(JsonMode.SHELL)));
+
+        assertEquals("{ \"_id\" : { \"$oid\" : \"5522d5d12cf8fb556a991f45\" }, \"int\" : 1, \"string\" : \"abc\" }",
+                     doc.toJson(getDefaultCodecRegistry().get(BasicDBObject.class)));
+
+        assertEquals("{ \"_id\" : ObjectId(\"5522d5d12cf8fb556a991f45\"), \"int\" : 1, \"string\" : \"abc\" }",
+                     doc.toJson(new JsonWriterSettings(JsonMode.SHELL), getDefaultCodecRegistry().get(BasicDBObject.class)));
+    }
 
     @Test
     public void testGetDate() {

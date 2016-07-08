@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -53,6 +53,8 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
  *    List<DBObject> obj = collection.find(query).skip(1000).limit(100).toArray();
  * }</pre>
  *
+ * See {@link Mongo#getDB(String)} for further information about the effective deprecation of this class.
+ *
  * @mongodb.driver.manual core/read-operations Read Operations
  */
 @NotThreadSafe
@@ -66,6 +68,7 @@ public class DBCursor implements Cursor, Iterable<DBObject> {
     private final FindOptions findOptions;
     private int options;
     private ReadPreference readPreference;
+    private ReadConcern readConcern;
     private Decoder<DBObject> resultDecoder;
     private DBDecoderFactory decoderFactory;
     private IteratorOrArray iteratorOrArray;
@@ -487,6 +490,7 @@ public class DBCursor implements Cursor, Iterable<DBObject> {
 
     private FindOperation<DBObject> getQueryOperation(final FindOptions options, final Decoder<DBObject> decoder) {
         FindOperation<DBObject> operation = new FindOperation<DBObject>(collection.getNamespace(), decoder)
+                                                .readConcern(getReadConcern())
                                                 .filter(collection.wrapAllowNull(filter))
                                                 .batchSize(options.getBatchSize())
                                                 .skip(options.getSkip())
@@ -663,7 +667,7 @@ public class DBCursor implements Cursor, Iterable<DBObject> {
      * @see DBCursor#size
      */
     public int count() {
-        return (int) collection.getCount(getQuery(), getKeysWanted(), 0, 0, getReadPreferenceForCursor(),
+        return (int) collection.getCount(getQuery(), 0, 0, getReadPreferenceForCursor(), getReadConcern(),
                                          findOptions.getMaxTime(MILLISECONDS), MILLISECONDS,
                                          collection.wrap(modifiers).get("$hint"));
     }
@@ -676,7 +680,7 @@ public class DBCursor implements Cursor, Iterable<DBObject> {
      */
     public DBObject one() {
         return collection.findOne(getQuery(), getKeysWanted(), sort,
-                                  getReadPreferenceForCursor(), findOptions.getMaxTime(MILLISECONDS), MILLISECONDS);
+                                  getReadPreferenceForCursor(), getReadConcern(), findOptions.getMaxTime(MILLISECONDS), MILLISECONDS);
     }
 
     /**
@@ -718,8 +722,8 @@ public class DBCursor implements Cursor, Iterable<DBObject> {
      * @see #count()
      */
     public int size() {
-        return (int) collection.getCount(getQuery(), getKeysWanted(), findOptions.getLimit(),
-                                         findOptions.getSkip(), getReadPreference(),
+        return (int) collection.getCount(getQuery(), findOptions.getLimit(),
+                                         findOptions.getSkip(), getReadPreference(), getReadConcern(),
                                          findOptions.getMaxTime(MILLISECONDS), MILLISECONDS);
     }
 
@@ -776,7 +780,39 @@ public class DBCursor implements Cursor, Iterable<DBObject> {
      * @return the readPreference used by this cursor
      */
     public ReadPreference getReadPreference() {
-        return readPreference;
+        if (readPreference != null) {
+            return readPreference;
+        }
+        return collection.getReadPreference();
+    }
+
+
+    /**
+     * Sets the read concern for this collection.
+     *
+     * @param readConcern the read concern to use for this collection
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    DBCursor setReadConcern(final ReadConcern readConcern) {
+        this.readConcern = readConcern;
+        return this;
+    }
+
+    /**
+     * Get the read concern for this collection.
+     *
+     * @return the {@link com.mongodb.ReadConcern}
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    ReadConcern getReadConcern() {
+        if (readConcern != null) {
+            return readConcern;
+        }
+        return collection.getReadConcern();
     }
 
     /**
@@ -814,7 +850,7 @@ public class DBCursor implements Cursor, Iterable<DBObject> {
     private void initializeCursor(final FindOperation<DBObject> operation) {
         cursor = new MongoBatchCursorAdapter<DBObject>(executor.execute(operation, getReadPreferenceForCursor()));
         if (isCursorFinalizerEnabled() && cursor.getServerCursor() != null) {
-            optionalFinalizer = new OptionalFinalizer(collection.getDB().getMongo());
+            optionalFinalizer = new OptionalFinalizer(collection.getDB().getMongo(), collection.getNamespace());
         }
     }
 
@@ -900,9 +936,11 @@ public class DBCursor implements Cursor, Iterable<DBObject> {
 
     private static class OptionalFinalizer {
         private final Mongo mongo;
+        private final MongoNamespace namespace;
         private volatile ServerCursor serverCursor;
 
-        private OptionalFinalizer(final Mongo mongo) {
+        private OptionalFinalizer(final Mongo mongo, final MongoNamespace namespace) {
+            this.namespace = notNull("namespace", namespace);
             this.mongo = notNull("mongo", mongo);
         }
 
@@ -913,7 +951,7 @@ public class DBCursor implements Cursor, Iterable<DBObject> {
         @Override
         protected void finalize() {
             if (serverCursor != null) {
-                mongo.addOrphanedCursor(serverCursor);
+                mongo.addOrphanedCursor(serverCursor, namespace);
             }
         }
     }

@@ -19,21 +19,24 @@ package com.mongodb.operation;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.binding.AsyncWriteBinding;
 import com.mongodb.binding.WriteBinding;
+import com.mongodb.client.model.ValidationAction;
+import com.mongodb.client.model.ValidationLevel;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
 import org.bson.BsonString;
 import org.bson.codecs.BsonDocumentCodec;
 
 import static com.mongodb.assertions.Assertions.notNull;
+import static com.mongodb.operation.CommandOperationHelper.VoidTransformer;
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocol;
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocolAsync;
 import static com.mongodb.operation.DocumentHelper.putIfNotZero;
-import static com.mongodb.operation.OperationHelper.VoidTransformer;
 
 /**
  * An operation to create a collection
  *
  * @since 3.0
+ * @mongodb.driver.manual reference/method/db.createCollection Create Collection
  */
 public class CreateCollectionOperation implements AsyncWriteOperation<Void>, WriteOperation<Void> {
     private final String databaseName;
@@ -44,6 +47,10 @@ public class CreateCollectionOperation implements AsyncWriteOperation<Void>, Wri
     private long maxDocuments = 0;
     private Boolean usePowerOf2Sizes = null;
     private BsonDocument storageEngineOptions;
+    private BsonDocument indexOptionDefaults;
+    private BsonDocument validator;
+    private ValidationLevel validationLevel = null;
+    private ValidationAction validationAction = null;
 
     /**
      * Construct a new instance.
@@ -188,7 +195,7 @@ public class CreateCollectionOperation implements AsyncWriteOperation<Void>, Wri
     /**
      * Sets the storage engine options document for this collection.
      *
-     * @param storageEngineOptions the storate engine options
+     * @param storageEngineOptions the storage engine options
      * @return this
      * @mongodb.server.release 3.0
      */
@@ -197,15 +204,114 @@ public class CreateCollectionOperation implements AsyncWriteOperation<Void>, Wri
         return this;
     }
 
+    /**
+     * Gets the index option defaults for the collection.
+     *
+     * @return the index option defaults
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     */
+    public BsonDocument getIndexOptionDefaults() {
+        return indexOptionDefaults;
+    }
+
+    /**
+     * Sets the index option defaults document for the collection.
+     *
+     * @param indexOptionDefaults the index option defaults
+     * @return this
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     */
+    public CreateCollectionOperation indexOptionDefaults(final BsonDocument indexOptionDefaults) {
+        this.indexOptionDefaults = indexOptionDefaults;
+        return this;
+    }
+
+    /**
+     * Gets the validation rules for inserting or updating documents
+     *
+     * @return the validation rules if set or null
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     */
+    public BsonDocument getValidator() {
+        return validator;
+    }
+
+    /**
+     * Sets the validation rules for inserting or updating documents
+     *
+     * @param validator the validation rules for inserting or updating documents
+     * @return this
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     */
+    public CreateCollectionOperation validator(final BsonDocument validator) {
+        this.validator = validator;
+        return this;
+    }
+
+    /**
+     * Gets the {@link ValidationLevel} that determines how strictly MongoDB applies the validation rules to existing documents during an
+     * insert or update.
+     *
+     * @return the ValidationLevel if set or null
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     */
+    public ValidationLevel getValidationLevel() {
+        return validationLevel;
+    }
+
+    /**
+     * Sets the validation level that determines how strictly MongoDB applies the validation rules to existing documents during an insert
+     * or update.
+     *
+     * @param validationLevel the validation level
+     * @return this
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     */
+    public CreateCollectionOperation validationLevel(final ValidationLevel validationLevel) {
+        this.validationLevel = validationLevel;
+        return this;
+    }
+
+    /**
+     * Gets the {@link ValidationAction}.
+     *
+     * @return the ValidationAction if set or null
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     */
+    public ValidationAction getValidationAction() {
+        return validationAction;
+    }
+
+    /**
+     * Sets the {@link ValidationAction} that determines whether to error on invalid documents or just warn about the violations but allow
+     * invalid documents.
+     *
+     * @param validationAction the validation action
+     * @return this
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     */
+    public CreateCollectionOperation validationAction(final ValidationAction validationAction) {
+        this.validationAction = validationAction;
+        return this;
+    }
+
     @Override
     public Void execute(final WriteBinding binding) {
-        executeWrappedCommandProtocol(databaseName, asDocument(), new BsonDocumentCodec(), binding);
+        executeWrappedCommandProtocol(binding, databaseName, asDocument(), new BsonDocumentCodec());
         return null;
     }
 
     @Override
     public void executeAsync(final AsyncWriteBinding binding, final SingleResultCallback<Void> callback) {
-        executeWrappedCommandProtocolAsync(databaseName, asDocument(), new BsonDocumentCodec(), binding,
+        executeWrappedCommandProtocolAsync(binding, databaseName, asDocument(), new BsonDocumentCodec(),
                                            new VoidTransformer<BsonDocument>(), callback);
     }
 
@@ -222,6 +328,18 @@ public class CreateCollectionOperation implements AsyncWriteOperation<Void>, Wri
         }
         if (storageEngineOptions != null) {
             document.put("storageEngine", storageEngineOptions);
+        }
+        if (indexOptionDefaults != null) {
+            document.put("indexOptionDefaults", indexOptionDefaults);
+        }
+        if (validator != null) {
+            document.put("validator", validator);
+        }
+        if (validationLevel != null) {
+            document.put("validationLevel", new BsonString(validationLevel.getValue()));
+        }
+        if (validationAction != null) {
+            document.put("validationAction", new BsonString(validationAction.getValue()));
         }
         return document;
     }

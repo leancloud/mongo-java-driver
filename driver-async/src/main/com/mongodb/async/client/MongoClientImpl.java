@@ -24,46 +24,22 @@ import com.mongodb.binding.AsyncReadBinding;
 import com.mongodb.binding.AsyncReadWriteBinding;
 import com.mongodb.binding.AsyncWriteBinding;
 import com.mongodb.connection.Cluster;
+import com.mongodb.diagnostics.logging.Logger;
+import com.mongodb.diagnostics.logging.Loggers;
 import com.mongodb.operation.AsyncOperationExecutor;
 import com.mongodb.operation.AsyncReadOperation;
 import com.mongodb.operation.AsyncWriteOperation;
 import org.bson.BsonDocument;
 import org.bson.Document;
-import org.bson.codecs.BsonValueCodecProvider;
-import org.bson.codecs.DocumentCodecProvider;
-import org.bson.codecs.ValueCodecProvider;
-import org.bson.codecs.configuration.CodecRegistry;
 
 import static com.mongodb.assertions.Assertions.notNull;
 import static com.mongodb.internal.async.ErrorHandlingResultCallback.errorHandlingCallback;
-import static java.util.Arrays.asList;
-import static org.bson.codecs.configuration.CodecRegistries.fromProviders;
 
 class MongoClientImpl implements MongoClient {
+    private static final Logger LOGGER = Loggers.getLogger("client");
     private final Cluster cluster;
     private final MongoClientSettings settings;
     private final AsyncOperationExecutor executor;
-
-    private static final CodecRegistry DEFAULT_CODEC_REGISTRY = fromProviders(asList(new ValueCodecProvider(),
-            new DocumentCodecProvider(),
-            new BsonValueCodecProvider()));
-
-    /**
-     * Gets the default codec registry.  It includes the following providers:
-     *
-     * <ul>
-     *     <li>{@link org.bson.codecs.ValueCodecProvider}</li>
-     *     <li>{@link org.bson.codecs.DocumentCodecProvider}</li>
-     *     <li>{@link org.bson.codecs.BsonValueCodecProvider}</li>
-     * </ul>
-     *
-     * @return the default codec registry
-     * @see MongoClientSettings#getCodecRegistry()
-     * @since 3.0
-     */
-    public static CodecRegistry getDefaultCodecRegistry() {
-        return DEFAULT_CODEC_REGISTRY;
-    }
 
     MongoClientImpl(final MongoClientSettings settings, final Cluster cluster) {
         this(settings, cluster, createOperationExecutor(settings, cluster));
@@ -77,7 +53,8 @@ class MongoClientImpl implements MongoClient {
 
     @Override
     public MongoDatabase getDatabase(final String name) {
-        return new MongoDatabaseImpl(name, settings.getCodecRegistry(), settings.getReadPreference(), settings.getWriteConcern(), executor);
+        return new MongoDatabaseImpl(name, settings.getCodecRegistry(), settings.getReadPreference(), settings.getWriteConcern(),
+                settings.getReadConcern(), executor);
     }
 
     @Override
@@ -92,8 +69,8 @@ class MongoClientImpl implements MongoClient {
 
     @Override
     public MongoIterable<String> listDatabaseNames() {
-        return new ListDatabasesIterableImpl<BsonDocument>(BsonDocument.class, getDefaultCodecRegistry(), ReadPreference.primary(),
-                executor).map(new Function<BsonDocument, String>() {
+        return new ListDatabasesIterableImpl<BsonDocument>(BsonDocument.class, MongoClients.getDefaultCodecRegistry(),
+                                                           ReadPreference.primary(), executor).map(new Function<BsonDocument, String>() {
             @Override
             public String apply(final BsonDocument document) {
                 return document.getString("name").getValue();
@@ -120,13 +97,16 @@ class MongoClientImpl implements MongoClient {
             @Override
             public <T> void execute(final AsyncReadOperation<T> operation, final ReadPreference readPreference,
                                     final SingleResultCallback<T> callback) {
-                final SingleResultCallback<T> wrappedCallback = errorHandlingCallback(callback);
+                notNull("operation", operation);
+                notNull("readPreference", readPreference);
+                notNull("callback", callback);
+                final SingleResultCallback<T> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 final AsyncReadBinding binding = getReadWriteBinding(readPreference, cluster);
                 operation.executeAsync(binding, new SingleResultCallback<T>() {
                     @Override
                     public void onResult(final T result, final Throwable t) {
                         try {
-                            wrappedCallback.onResult(result, t);
+                            errHandlingCallback.onResult(result, t);
                         } finally {
                             binding.release();
                         }
@@ -136,12 +116,14 @@ class MongoClientImpl implements MongoClient {
 
             @Override
             public <T> void execute(final AsyncWriteOperation<T> operation, final SingleResultCallback<T> callback) {
+                notNull("operation", operation);
+                notNull("callback", callback);
                 final AsyncWriteBinding binding = getReadWriteBinding(ReadPreference.primary(), cluster);
                 operation.executeAsync(binding, new SingleResultCallback<T>() {
                     @Override
                     public void onResult(final T result, final Throwable t) {
                         try {
-                            errorHandlingCallback(callback).onResult(result, t);
+                            errorHandlingCallback(callback, LOGGER).onResult(result, t);
                         } finally {
                             binding.release();
                         }

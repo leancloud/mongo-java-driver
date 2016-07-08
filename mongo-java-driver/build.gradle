@@ -24,7 +24,7 @@ archivesBaseName = 'mongo-java-driver'
 idea {
     module {
         sourceDirs = [] // Ignore in idea (prevents intellij crashing due to sources outside project dir)
-    }
+}
 }
 
 // dependencies copied from driver-core
@@ -59,7 +59,7 @@ jar {
                     'io.netty.*;resolution:=optional',
                     'org.slf4j;resolution:=optional'
     }
-}
+    }
 
 modifyPom {
     project {

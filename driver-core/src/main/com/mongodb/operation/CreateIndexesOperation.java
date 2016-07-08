@@ -50,6 +50,7 @@ import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommand
 import static com.mongodb.operation.IndexHelper.generateIndexName;
 import static com.mongodb.operation.OperationHelper.AsyncCallableWithConnection;
 import static com.mongodb.operation.OperationHelper.CallableWithConnection;
+import static com.mongodb.operation.OperationHelper.LOGGER;
 import static com.mongodb.operation.OperationHelper.releasingCallback;
 import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionTwoDotSix;
 import static com.mongodb.operation.OperationHelper.withConnection;
@@ -113,7 +114,7 @@ public class CreateIndexesOperation implements AsyncWriteOperation<Void>, WriteO
             public Void call(final Connection connection) {
                 if (serverIsAtLeastVersionTwoDotSix(connection.getDescription())) {
                     try {
-                        executeWrappedCommandProtocol(namespace.getDatabaseName(), getCommand(), connection);
+                        executeWrappedCommandProtocol(binding, namespace.getDatabaseName(), getCommand(), connection);
                     } catch (MongoCommandException e) {
                         throw checkForDuplicateKeyError(e);
                     }
@@ -133,17 +134,19 @@ public class CreateIndexesOperation implements AsyncWriteOperation<Void>, WriteO
         withConnection(binding, new AsyncCallableWithConnection() {
             @Override
             public void call(final AsyncConnection connection, final Throwable t) {
+                SingleResultCallback<Void> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 if (t != null) {
-                    errorHandlingCallback(callback).onResult(null, t);
+                    errHandlingCallback.onResult(null, t);
                 } else {
-                    final SingleResultCallback<Void> wrappedCallback = releasingCallback(errorHandlingCallback(callback), connection);
+                    final SingleResultCallback<Void> wrappedCallback = releasingCallback(errHandlingCallback, connection);
                     if (serverIsAtLeastVersionTwoDotSix(connection.getDescription())) {
-                        executeWrappedCommandProtocolAsync(namespace.getDatabaseName(), getCommand(), connection,
-                                                           new SingleResultCallback<BsonDocument>() {
-                                                               @Override
-                                                               public void onResult(final BsonDocument result, final Throwable t) {
-                                                                   wrappedCallback.onResult(null, translateException(t));
-                                                               }});
+                        executeWrappedCommandProtocolAsync(binding, namespace.getDatabaseName(), getCommand(), connection,
+                                new SingleResultCallback<BsonDocument>() {
+                                    @Override
+                                    public void onResult(final BsonDocument result, final Throwable t) {
+                                        wrappedCallback.onResult(null, translateException(t));
+                                    }
+                                });
                     } else {
                         if (requests.size() > 1) {
                             wrappedCallback.onResult(null, new MongoInternalException("Creation of multiple indexes simultaneously not "
@@ -217,6 +220,9 @@ public class CreateIndexesOperation implements AsyncWriteOperation<Void>, WriteO
         }
         if (request.getStorageEngine() != null) {
             index.append("storageEngine", request.getStorageEngine());
+        }
+        if (request.getPartialFilterExpression() != null) {
+            index.append("partialFilterExpression", request.getPartialFilterExpression());
         }
         return index;
     }

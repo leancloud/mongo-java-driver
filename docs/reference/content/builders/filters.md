@@ -135,6 +135,18 @@ This example selects documents that have a `qty` field and its value does not eq
 and(exists("qty"), nin("qty", 5, 15))
 ```
 
+This example selects documents that have a `qty` field with the type of `BsonInt32`:
+
+```java
+type("qty", BsonType.INT32)
+```
+
+Available with MongoDB 3.2, this example selects any documents that have a `qty` field with any "number" bson type:
+
+```java
+type("qty", "number")
+```
+
 ### Evaluation
 
 The evaluation operator methods include:
@@ -150,6 +162,88 @@ This example assumes a collection that has a text index in the field `abstract`.
 containing the term `coffee`:
 
 ```java
-text("abstract", "coffee")
+text("coffee")
 ```
+
+Available with MongoDB 3.2, a version 3 text index allows case-sensitive searches. This example selects documents that have an 
+`abstract` field containing the exact term `coffee`:
+
+```java
+text("coffee", new TextSearchOptions().caseSensitive(true))
+```
+
+Available with MongoDB 3.2, a version 3 text index allows diacritic-sensitive searches. This example selects documents that have an 
+`abstract` field containing the exact term `café`:
+
+```java
+text("café", new TextSearchOptions().diacriticSensitive(true))
+```
+
+### Bitwise
+
+The bitwise query operators, available with MongoDB 3.2 include:
+
+- `bitsAllSet`: Selects documents where the all the specified bits of a field are set (i.e. 1).
+- `bitsAllClear`: Selects documents where the all the specified bits of a field are clear (i.e. 0).
+- `bitsAnySet`: Selects documents where at least one of the specified bits of a field are set (i.e. 1).
+- `bitsAnyClear`: Selects documents where at least one of the specified bits of a field are clear (i.e. 0)
+
+
+#### Examples
+
+The example selects documents that have a `bitField` field with bits set at positions of the corresponding bitmask `50` (i.e. `00110010`):
+
+```java
+bitsAllSet("bitField", 50)
+```
+
+### Geospatial
+
+The geospatial operator methods include:
+
+- `geoWithin`: Selects all documents containing a field whose value is a GeoJSON geometry that falls within within a bounding GeoJSON 
+geometry.
+- `geoWithinBox`: Selects all documents containing a field with grid coordinates data that exist entirely within the specified box.
+- `geoWithinPolygon`: Selects all documents containing a field with grid coordinates data that exist entirely within the specified polygon.
+- `geoWithinCenter`: Selects all documents containing a field with grid coordinates data that exist entirely within the specified circle.
+- `geoWithinCenterSphere`: Selects geometries containing a field with geospatial data (GeoJSON or legacy coordinate pairs) that exist 
+entirely within the specified circle, using spherical geometry. 
+- `geoIntersects`: Selects geometries that intersect with a GeoJSON geometry. The 2dsphere index supports $geoIntersects.
+- `near`: Returns geospatial objects in proximity to a point. Requires a geospatial index. The 2dsphere and 2d indexes support $near.
+- `nearSphere`: Returns geospatial objects in proximity to a point on a sphere. Requires a geospatial index. The 2dsphere and 2d 
+indexes support $nearSphere. 
+
+To make it easier to construct GeoJSON-based filters, the driver also include a full GeoJSON class hierarchy:
+
+- [`Point`]({{< apiref "com/mongodb/client/model/geojson/Point" >}}): A representation of a GeoJSON Point.
+- [`MultiPoint`]({{< apiref "com/mongodb/client/model/geojson/MultiPoint" >}}): A representation of a GeoJSON MultiPoint.
+- [`LineString`]({{< apiref "com/mongodb/client/model/geojson/LineString" >}}): A representation of a GeoJSON LineString.
+- [`MultiLineString`]({{< apiref "com/mongodb/client/model/geojson/MultiLineString" >}}): A representation of a GeoJSON MultiLineString.
+- [`Polygon`]({{< apiref "com/mongodb/client/model/geojson/Polygon" >}}): A representation of a GeoJSON Polygon.
+- [`MultiPolygon`]({{< apiref "com/mongodb/client/model/geojson/MultiPolygon" >}}): A representation of a GeoJSON MultiPolygon.
+- [`GeometryCollection`]({{< apiref "com/mongodb/client/model/geojson/GeometryCollection" >}}): A representation of a GeoJSON 
+GeometryCollection.
+
+
+#### Examples
+
+This example creates a filter that selects all documents where the `geo` field contains a GeoJSON Geometry object that falls within the 
+given polygon:
+
+```java
+Polygon polygon = new Polygon(Arrays.asList(new Position(0, 0), 
+                                            new Position(4, 0), 
+                                            new Position(4, 4), 
+                                            new Position(0, 4),
+                                            new Position(0, 0)));
+geoWithin("geo", polygon))
+```
+
+Similarly, this example creates a filter that selects all documents where the `geo` field contains a GeoJSON Geometry object that 
+intersects the given Point:
+
+```java
+geoIntersects("geo", new Point(new Position(4, 0)))
+```
+
 

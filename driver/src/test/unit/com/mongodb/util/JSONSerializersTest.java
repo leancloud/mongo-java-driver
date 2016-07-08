@@ -27,6 +27,7 @@ import org.bson.types.CodeWScope;
 import org.bson.types.MaxKey;
 import org.bson.types.MinKey;
 import org.bson.types.ObjectId;
+import org.bson.types.Symbol;
 import org.junit.Test;
 
 import javax.xml.bind.DatatypeConverter;
@@ -122,6 +123,11 @@ public class JSONSerializersTest {
         serializer.serialize(dbref, buf);
         assertEquals("{ \"$ref\" : \"test.test\" , \"$id\" : \"4d83ab59a39562db9c1ae2af\"}", buf.toString());
 
+        DBRef dbrefWithDatabaseName = new com.mongodb.DBRef("mydb", "test.test", "4d83ab59a39562db9c1ae2af");
+        buf = new StringBuilder();
+        serializer.serialize(dbrefWithDatabaseName, buf);
+        assertEquals("{ \"$ref\" : \"test.test\" , \"$id\" : \"4d83ab59a39562db9c1ae2af\" , \"$db\" : \"mydb\"}", buf.toString());
+
         // test  ITERABLE
         BasicBSONList testList = new BasicBSONList();
         testList.add(new BasicDBObject("key1", "val1"));
@@ -209,6 +215,11 @@ public class JSONSerializersTest {
         buf = new StringBuilder();
         serializer.serialize(d, buf);
         assertEquals("{ \"$date\" : " + (d.getTime()) + "}", buf.toString());
+
+        // test  SYMBOL
+        buf = new StringBuilder();
+        serializer.serialize(new Symbol("test"), buf);
+        assertEquals("{ \"$symbol\" : \"test\"}", buf.toString());
     }
 
     @Test

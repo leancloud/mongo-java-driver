@@ -16,6 +16,7 @@
 
 package com.mongodb.connection.netty;
 
+import com.mongodb.MongoException;
 import com.mongodb.MongoInternalException;
 import com.mongodb.MongoInterruptedException;
 import com.mongodb.MongoSocketOpenException;
@@ -32,16 +33,16 @@ import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.ReadTimeoutException;
-import io.netty.handler.timeout.ReadTimeoutHandler;
+import io.netty.util.concurrent.EventExecutor;
 import org.bson.ByteBuf;
 
 import javax.net.ssl.SSLContext;
@@ -59,10 +60,12 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
  * A Stream implementation based on Netty 4.0.
  */
 final class NettyStream implements Stream {
+    private static final String READ_HANDLER_NAME = "ReadTimeoutHandler";
     private final ServerAddress address;
     private final SocketSettings settings;
     private final SslSettings sslSettings;
     private final EventLoopGroup workerGroup;
+    private final Class<? extends SocketChannel> socketChannelClass;
     private final ByteBufAllocator allocator;
 
     private volatile boolean isClosed;
@@ -73,11 +76,13 @@ final class NettyStream implements Stream {
     private volatile Throwable pendingException;
 
     public NettyStream(final ServerAddress address, final SocketSettings settings, final SslSettings sslSettings,
-                       final EventLoopGroup workerGroup, final ByteBufAllocator allocator) {
+                       final EventLoopGroup workerGroup, final Class<? extends SocketChannel> socketChannelClass,
+                       final ByteBufAllocator allocator) {
         this.address = address;
         this.settings = settings;
         this.sslSettings = sslSettings;
         this.workerGroup = workerGroup;
+        this.socketChannelClass = socketChannelClass;
         this.allocator = allocator;
     }
 
@@ -97,7 +102,7 @@ final class NettyStream implements Stream {
     public void openAsync(final AsyncCompletionHandler<Void> handler) {
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(workerGroup);
-        bootstrap.channel(NioSocketChannel.class);
+        bootstrap.channel(socketChannelClass);
 
         bootstrap.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, settings.getConnectTimeout(MILLISECONDS));
         bootstrap.option(ChannelOption.TCP_NODELAY, true);
@@ -122,7 +127,10 @@ final class NettyStream implements Stream {
                     }
                     ch.pipeline().addFirst("ssl", new SslHandler(engine, false));
                 }
-                ch.pipeline().addLast("readTimeoutHandler", new ReadTimeoutHandler(settings.getReadTimeout(MILLISECONDS), MILLISECONDS));
+                int readTimeout = settings.getReadTimeout(MILLISECONDS);
+                if (readTimeout > 0) {
+                    ch.pipeline().addLast(READ_HANDLER_NAME, new ReadTimeoutHandler(readTimeout));
+                }
                 ch.pipeline().addLast(new InboundBufferHandler());
             }
         });
@@ -134,7 +142,7 @@ final class NettyStream implements Stream {
                     channel = channelFuture.channel();
                     handler.completed(null);
                 } else {
-                    handler.failed(future.cause());
+                    handler.failed(new MongoSocketOpenException("Exception opening socket", getAddress(), future.cause()));
                 }
             }
         });
@@ -177,6 +185,7 @@ final class NettyStream implements Stream {
 
     @Override
     public void readAsync(final int numBytes, final AsyncCompletionHandler<ByteBuf> handler) {
+        scheduleReadTimeout();
         ByteBuf buffer = null;
         Throwable exceptionResult = null;
         synchronized (this) {
@@ -208,9 +217,11 @@ final class NettyStream implements Stream {
             }
         }
         if (exceptionResult != null) {
+            disableReadTimeout();
             handler.failed(exceptionResult);
         }
         if (buffer != null) {
+            disableReadTimeout();
             handler.completed(buffer);
         }
     }
@@ -269,6 +280,26 @@ final class NettyStream implements Stream {
         return isClosed;
     }
 
+    public SocketSettings getSettings() {
+        return settings;
+    }
+
+    public SslSettings getSslSettings() {
+        return sslSettings;
+    }
+
+    public EventLoopGroup getWorkerGroup() {
+        return workerGroup;
+    }
+
+    public Class<? extends SocketChannel> getSocketChannelClass() {
+        return socketChannelClass;
+    }
+
+    public ByteBufAllocator getAllocator() {
+        return allocator;
+    }
+
     private class InboundBufferHandler extends SimpleChannelInboundHandler<io.netty.buffer.ByteBuf> {
         @Override
         protected void channelRead0(final ChannelHandlerContext ctx, final io.netty.buffer.ByteBuf buffer) throws Exception {
@@ -322,10 +353,8 @@ final class NettyStream implements Stream {
                 if (throwable != null) {
                     if (throwable instanceof IOException) {
                         throw (IOException) throwable;
-                    } else if (throwable instanceof MongoSocketReadTimeoutException) {
-                        throw (MongoSocketReadTimeoutException) throwable;
-                    } else if (throwable instanceof MongoSocketOpenException) {
-                        throw (MongoSocketOpenException) throwable;
+                    } else if (throwable instanceof MongoException) {
+                        throw (MongoException) throwable;
                     } else {
                         throw new MongoInternalException("Exception thrown from Netty Stream", throwable);
                     }
@@ -335,5 +364,46 @@ final class NettyStream implements Stream {
                 throw new MongoInterruptedException("Interrupted", e);
             }
         }
+    }
+
+    private void scheduleReadTimeout() {
+        adjustTimeout(false);
+    }
+
+    private void disableReadTimeout() {
+        adjustTimeout(true);
+    }
+
+    private void adjustTimeout(final boolean disable) {
+            ChannelHandler timeoutHandler = channel.pipeline().get(READ_HANDLER_NAME);
+            if (timeoutHandler != null) {
+                final ReadTimeoutHandler readTimeoutHandler = (ReadTimeoutHandler) timeoutHandler;
+                final ChannelHandlerContext handlerContext = channel.pipeline().context(timeoutHandler);
+                EventExecutor executor = handlerContext.executor();
+
+                if (disable) {
+                    if (executor.inEventLoop()) {
+                        readTimeoutHandler.removeTimeout(handlerContext);
+                    } else {
+                        executor.submit(new Runnable() {
+                            @Override
+                            public void run() {
+                                readTimeoutHandler.removeTimeout(handlerContext);
+                            }
+                        });
+                    }
+                } else {
+                    if (executor.inEventLoop()) {
+                        readTimeoutHandler.scheduleTimeout(handlerContext);
+                    } else {
+                        executor.submit(new Runnable() {
+                            @Override
+                            public void run() {
+                                readTimeoutHandler.scheduleTimeout(handlerContext);
+                            }
+                        });
+                    }
+                }
+            }
     }
 }

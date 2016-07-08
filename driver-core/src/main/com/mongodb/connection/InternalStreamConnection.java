@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2015 MongoDB, Inc.
+ * Copyright 2013-2016 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,10 +27,11 @@ import com.mongodb.ServerAddress;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.diagnostics.logging.Logger;
 import com.mongodb.diagnostics.logging.Loggers;
-import com.mongodb.event.ConnectionEvent;
+import com.mongodb.event.ConnectionClosedEvent;
 import com.mongodb.event.ConnectionListener;
 import com.mongodb.event.ConnectionMessageReceivedEvent;
 import com.mongodb.event.ConnectionMessagesSentEvent;
+import com.mongodb.event.ConnectionOpenedEvent;
 import org.bson.ByteBuf;
 import org.bson.io.ByteBufferBsonInput;
 
@@ -115,7 +116,7 @@ class InternalStreamConnection implements InternalConnection {
             description = connectionInitializer.initialize(this);
             opened.set(true);
 
-            connectionListener.connectionOpened(new ConnectionEvent(getId()));
+            connectionListener.connectionOpened(new ConnectionOpenedEvent(getId()));
             LOGGER.info(format("Opened connection [%s] to %s", getId(), serverId.getAddress()));
         } catch (Throwable t) {
             close();
@@ -148,7 +149,7 @@ class InternalStreamConnection implements InternalConnection {
                         } else {
                             description = result;
                             opened.set(true);
-                            connectionListener.connectionOpened(new ConnectionEvent(getId()));
+                            connectionListener.connectionOpened(new ConnectionOpenedEvent(getId()));
                             if (LOGGER.isInfoEnabled()) {
                                 LOGGER.info(format("Opened connection [%s] to %s", getId(), serverId.getAddress()));
                             }
@@ -174,7 +175,7 @@ class InternalStreamConnection implements InternalConnection {
             stream.close();
         }
         isClosed.set(true);
-        connectionListener.connectionClosed(new ConnectionEvent(getId()));
+        connectionListener.connectionClosed(new ConnectionClosedEvent(getId()));
     }
 
     @Override
@@ -492,7 +493,7 @@ class InternalStreamConnection implements InternalConnection {
         ReplyHeader replyHeader;
         ByteBufferBsonInput headerInputBuffer = new ByteBufferBsonInput(headerByteBuffer);
         try {
-            replyHeader = new ReplyHeader(headerInputBuffer);
+            replyHeader = new ReplyHeader(headerInputBuffer, description.getMaxMessageSize());
         } finally {
             headerInputBuffer.close();
         }
@@ -519,23 +520,27 @@ class InternalStreamConnection implements InternalConnection {
         }
 
         @Override
-        public void onResult(final ByteBuf result, final Throwable t) {
-            if (t != null) {
-                callback.onResult(null, t);
+        public void onResult(final ByteBuf result, final Throwable throwableFromCallback) {
+            if (throwableFromCallback != null) {
+                callback.onResult(null, throwableFromCallback);
             } else {
-                ReplyHeader replyHeader;
-                ByteBufferBsonInput headerInputBuffer = new ByteBufferBsonInput(result);
                 try {
-                    replyHeader = new ReplyHeader(headerInputBuffer);
-                } finally {
-                    headerInputBuffer.close();
-                }
+                    ReplyHeader replyHeader;
+                    ByteBufferBsonInput headerInputBuffer = new ByteBufferBsonInput(result);
+                    try {
+                        replyHeader = new ReplyHeader(headerInputBuffer, description.getMaxMessageSize());
+                    } finally {
+                        headerInputBuffer.close();
+                    }
 
-                if (replyHeader.getMessageLength() == REPLY_HEADER_LENGTH) {
-                    onSuccess(new ResponseBuffers(replyHeader, null));
-                } else {
-                    readAsync(replyHeader.getMessageLength() - REPLY_HEADER_LENGTH,
-                              new ResponseBodyCallback(replyHeader));
+                    if (replyHeader.getMessageLength() == REPLY_HEADER_LENGTH) {
+                        onSuccess(new ResponseBuffers(replyHeader, null));
+                    } else {
+                        readAsync(replyHeader.getMessageLength() - REPLY_HEADER_LENGTH,
+                                  new ResponseBodyCallback(replyHeader));
+                    }
+                } catch (Throwable t) {
+                    callback.onResult(null, t);
                 }
             }
         }
@@ -640,7 +645,7 @@ class InternalStreamConnection implements InternalConnection {
         }
 
         @Override
-        public void connectionOpened(final ConnectionEvent event) {
+        public void connectionOpened(final ConnectionOpenedEvent event) {
             try {
                 wrapped.connectionOpened(event);
             } catch (Throwable t) {
@@ -649,7 +654,7 @@ class InternalStreamConnection implements InternalConnection {
        }
 
         @Override
-        public void connectionClosed(final ConnectionEvent event) {
+        public void connectionClosed(final ConnectionClosedEvent event) {
             try {
                 wrapped.connectionClosed(event);
             } catch (Throwable t) {

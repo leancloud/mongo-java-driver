@@ -33,7 +33,7 @@ import static java.util.Arrays.asList;
  */
 public class IndexRequest {
     private final BsonDocument keys;
-    private static final List<Integer> VALID_TEXT_INDEX_VERSIONS = asList(1, 2);
+    private static final List<Integer> VALID_TEXT_INDEX_VERSIONS = asList(1, 2, 3);
     private static final List<Integer> VALID_SPHERE_INDEX_VERSIONS = asList(1, 2);
     private boolean background;
     private boolean unique;
@@ -52,6 +52,7 @@ public class IndexRequest {
     private Double bucketSize;
     private boolean dropDups;
     private BsonDocument storageEngine;
+    private BsonDocument partialFilterExpression;
 
     /**
      * Construct a new instance with the given keys
@@ -297,7 +298,7 @@ public class IndexRequest {
      */
     public IndexRequest textVersion(final Integer textVersion) {
         if (textVersion != null) {
-            isTrueArgument("textVersion must be 1 or 2", VALID_TEXT_INDEX_VERSIONS.contains(textVersion));
+            isTrueArgument("textVersion must be 1, 2 or 3", VALID_TEXT_INDEX_VERSIONS.contains(textVersion));
         }
         this.textVersion = textVersion;
         return this;
@@ -435,6 +436,7 @@ public class IndexRequest {
         this.dropDups = dropDups;
         return this;
     }
+
     /**
      * Gets the storage engine options document for this index.
      *
@@ -448,12 +450,38 @@ public class IndexRequest {
     /**
      * Sets the storage engine options document for this index.
      *
-     * @param storageEngineOptions the storate engine options
+     * @param storageEngineOptions the storage engine options
      * @return this
      * @mongodb.server.release 3.0
      */
     public IndexRequest storageEngine(final BsonDocument storageEngineOptions) {
         this.storageEngine = storageEngineOptions;
+        return this;
+    }
+
+    /**
+     * Get the filter expression for the documents to be included in the index or null if not set
+     *
+     * @return the filter expression for the documents to be included in the index or null if not set
+     * @mongodb.server.release 3.2
+     * @mongodb.driver.manual /core/index-partial/ Partial Indexes
+     * @since 3.2
+     */
+    public BsonDocument getPartialFilterExpression() {
+        return partialFilterExpression;
+    }
+
+    /**
+     * Sets the filter expression for the documents to be included in the index
+     *
+     * @param partialFilterExpression the filter expression for the documents to be included in the index
+     * @return this
+     * @mongodb.server.release 3.2
+     * @mongodb.driver.manual /core/index-partial/ Partial Indexes
+     * @since 3.2
+     */
+    public IndexRequest partialFilterExpression(final BsonDocument partialFilterExpression) {
+        this.partialFilterExpression = partialFilterExpression;
         return this;
     }
 

@@ -22,6 +22,7 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 import java.util.concurrent.TimeUnit;
@@ -34,6 +35,7 @@ import static java.util.Arrays.asList;
 import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
@@ -206,7 +208,7 @@ public class DBCursorTest extends DatabaseTestCase {
 
     @Test
     public void testGetCursorId() {
-        DBCursor cursor = collection.find().limit(2);
+        DBCursor cursor = collection.find().batchSize(2);
         assertEquals(0, cursor.getCursorId());
         cursor.hasNext();
         assertThat(cursor.getCursorId(), is(not(0L)));
@@ -347,12 +349,13 @@ public class DBCursorTest extends DatabaseTestCase {
 
     @Test
     public void testShowDiskLoc() {
+        String fieldName = serverVersionAtLeast(Arrays.asList(3, 1, 0)) ? "$recordId" : "$diskLoc";
         DBCursor cursor = new DBCursor(collection, new BasicDBObject(), new BasicDBObject(), ReadPreference.primary())
                           .addSpecial("$showDiskLoc", true);
         try {
             while (cursor.hasNext()) {
                 DBObject next = cursor.next();
-                Assert.assertNotNull(next.toString(), next.get("$diskLoc"));
+                assertNotNull(next.toString(), next.get(fieldName));
             }
         } finally {
             cursor.close();
@@ -362,7 +365,7 @@ public class DBCursorTest extends DatabaseTestCase {
         try {
             while (cursor.hasNext()) {
                 DBObject next = cursor.next();
-                Assert.assertNotNull(next.toString(), next.get("$diskLoc"));
+                assertNotNull(next.toString(), next.get(fieldName));
             }
         } finally {
             cursor.close();
@@ -410,8 +413,13 @@ public class DBCursorTest extends DatabaseTestCase {
         // then
         DBCollection profileCollection = database.getCollection("system.profile");
         assertEquals(1, profileCollection.count());
-        assertEquals(expectedComment, ((DBObject) profileCollection.findOne().get("query")).get("$comment"));
 
+        DBObject profileDocument = profileCollection.findOne();
+        if (serverVersionAtLeast(asList(3, 1, 7))) {
+            assertEquals(expectedComment, ((DBObject) profileDocument.get("query")).get("comment"));
+        } else {
+            assertEquals(expectedComment, ((DBObject) profileDocument.get("query")).get("$comment"));
+        }
         // finally
         database.command(new BasicDBObject("profile", 0));
         profileCollection.drop();

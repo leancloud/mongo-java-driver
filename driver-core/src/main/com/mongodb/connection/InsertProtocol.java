@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 package com.mongodb.connection;
 
-import com.mongodb.MongoException;
 import com.mongodb.MongoNamespace;
 import com.mongodb.WriteConcern;
 import com.mongodb.WriteConcernResult;
@@ -24,6 +23,9 @@ import com.mongodb.async.SingleResultCallback;
 import com.mongodb.bulk.InsertRequest;
 import com.mongodb.diagnostics.logging.Logger;
 import com.mongodb.diagnostics.logging.Loggers;
+import org.bson.BsonArray;
+import org.bson.BsonDocument;
+import org.bson.BsonInt32;
 
 import java.util.List;
 
@@ -80,7 +82,7 @@ class InsertProtocol extends WriteProtocol {
                 @Override
                 public void onResult(final WriteConcernResult result, final Throwable t) {
                     if (t != null) {
-                        callback.onResult(null, MongoException.fromThrowable(t));
+                        callback.onResult(null, t);
                     } else {
                         LOGGER.debug("Asynchronous insert completed");
                         callback.onResult(result, null);
@@ -92,8 +94,23 @@ class InsertProtocol extends WriteProtocol {
         }
     }
 
+    @Override
+    protected BsonDocument getAsWriteCommand(final ByteBufferBsonOutput bsonOutput, final int firstDocumentPosition) {
+        return getBaseCommandDocument("insert")
+               .append("documents", new BsonArray(ByteBufBsonDocument.create(bsonOutput, firstDocumentPosition)));
+
+    }
+
     protected RequestMessage createRequestMessage(final MessageSettings settings) {
         return new InsertMessage(getNamespace().getFullName(), isOrdered(), getWriteConcern(), insertRequestList, settings);
+    }
+
+    @Override
+    protected void appendToWriteCommandResponseDocument(final RequestMessage curMessage, final RequestMessage nextMessage,
+                                                        final WriteConcernResult writeConcernResult, final BsonDocument response) {
+        response.append("n", new BsonInt32(nextMessage == null ? ((InsertMessage) curMessage).getInsertRequestList().size()
+                                                               : ((InsertMessage) curMessage).getInsertRequestList().size()
+                                                                 - ((InsertMessage) nextMessage).getInsertRequestList().size()));
     }
 
     @Override

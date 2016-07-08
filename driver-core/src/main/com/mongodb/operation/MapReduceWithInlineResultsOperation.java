@@ -17,8 +17,9 @@
 package com.mongodb.operation;
 
 import com.mongodb.ExplainVerbosity;
-import com.mongodb.Function;
 import com.mongodb.MongoNamespace;
+import com.mongodb.ReadConcern;
+import com.mongodb.ServerAddress;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.binding.AsyncReadBinding;
 import com.mongodb.binding.ConnectionSource;
@@ -27,6 +28,7 @@ import com.mongodb.connection.AsyncConnection;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.ConnectionDescription;
 import com.mongodb.connection.QueryResult;
+import com.mongodb.operation.CommandOperationHelper.CommandTransformer;
 import com.mongodb.operation.OperationHelper.AsyncCallableWithConnection;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
@@ -47,6 +49,8 @@ import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommand
 import static com.mongodb.operation.DocumentHelper.putIfNotZero;
 import static com.mongodb.operation.DocumentHelper.putIfTrue;
 import static com.mongodb.operation.OperationHelper.CallableWithConnectionAndSource;
+import static com.mongodb.operation.OperationHelper.LOGGER;
+import static com.mongodb.operation.OperationHelper.checkValidReadConcern;
 import static com.mongodb.operation.OperationHelper.releasingCallback;
 import static com.mongodb.operation.OperationHelper.withConnection;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -76,6 +80,7 @@ public class MapReduceWithInlineResultsOperation<T> implements AsyncReadOperatio
     private boolean jsMode;
     private boolean verbose;
     private long maxTimeMS;
+    private ReadConcern readConcern = ReadConcern.DEFAULT;
 
     /**
      * Construct a MapReduceOperation with all the criteria it needs to execute.
@@ -295,6 +300,29 @@ public class MapReduceWithInlineResultsOperation<T> implements AsyncReadOperatio
     }
 
     /**
+     * Gets the read concern
+     *
+     * @return the read concern
+     * @since 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    public ReadConcern getReadConcern() {
+        return readConcern;
+    }
+
+    /**
+     * Sets the read concern
+     * @param readConcern the read concern
+     * @return this
+     * @since 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    public MapReduceWithInlineResultsOperation<T> readConcern(final ReadConcern readConcern) {
+        this.readConcern = notNull("readConcern", readConcern);
+        return this;
+    }
+
+    /**
      * Executing this will return a cursor with your results and the statistics in.
      *
      * @param binding the binding
@@ -306,7 +334,8 @@ public class MapReduceWithInlineResultsOperation<T> implements AsyncReadOperatio
         return withConnection(binding, new CallableWithConnectionAndSource<MapReduceBatchCursor<T>>() {
             @Override
             public MapReduceBatchCursor<T> call(final ConnectionSource source, final Connection connection) {
-                return executeWrappedCommandProtocol(namespace.getDatabaseName(), getCommand(),
+                checkValidReadConcern(connection, readConcern);
+                return executeWrappedCommandProtocol(binding, namespace.getDatabaseName(), getCommand(),
                                                      CommandResultDocumentCodec.create(decoder, "results"),
                                                      connection, transformer(source, connection));
             }
@@ -318,13 +347,24 @@ public class MapReduceWithInlineResultsOperation<T> implements AsyncReadOperatio
         withConnection(binding, new AsyncCallableWithConnection() {
             @Override
             public void call(final AsyncConnection connection, final Throwable t) {
+                SingleResultCallback<MapReduceAsyncBatchCursor<T>> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 if (t != null) {
-                    errorHandlingCallback(callback).onResult(null, t);
+                    errHandlingCallback.onResult(null, t);
                 } else {
-                    executeWrappedCommandProtocolAsync(namespace.getDatabaseName(), getCommand(),
-                                                       CommandResultDocumentCodec.create(decoder, "results"),
-                                                       connection, binding.getReadPreference(), asyncTransformer(connection),
-                                                       releasingCallback(errorHandlingCallback(callback), connection));
+                    final SingleResultCallback<MapReduceAsyncBatchCursor<T>> wrappedCallback = releasingCallback(
+                            errHandlingCallback, connection);
+                    checkValidReadConcern(connection, readConcern, new AsyncCallableWithConnection() {
+                        @Override
+                        public void call(final AsyncConnection connection, final Throwable t) {
+                            if (t != null) {
+                                wrappedCallback.onResult(null, t);
+                            } else {
+                                executeWrappedCommandProtocolAsync(binding, namespace.getDatabaseName(), getCommand(),
+                                        CommandResultDocumentCodec.create(decoder, "results"), connection, asyncTransformer(connection),
+                                        wrappedCallback);
+                            }
+                        }
+                    });
                 }
             }
         });
@@ -356,20 +396,21 @@ public class MapReduceWithInlineResultsOperation<T> implements AsyncReadOperatio
                                                       new BsonDocumentCodec());
     }
 
-    private Function<BsonDocument, MapReduceBatchCursor<T>> transformer(final ConnectionSource source, final Connection connection) {
-        return new Function<BsonDocument, MapReduceBatchCursor<T>>() {
+    private CommandTransformer<BsonDocument, MapReduceBatchCursor<T>> transformer(final ConnectionSource source,
+                                                                                  final Connection connection) {
+        return new CommandTransformer<BsonDocument, MapReduceBatchCursor<T>>() {
             @Override
-            public MapReduceBatchCursor<T> apply(final BsonDocument result) {
+            public MapReduceBatchCursor<T> apply(final BsonDocument result, final ServerAddress serverAddress) {
                 return new MapReduceInlineResultsCursor<T>(createQueryResult(result, connection.getDescription()), decoder, source,
                                                            MapReduceHelper.createStatistics(result));
             }
         };
     }
 
-    private Function<BsonDocument, MapReduceAsyncBatchCursor<T>> asyncTransformer(final AsyncConnection connection) {
-        return new Function<BsonDocument, MapReduceAsyncBatchCursor<T>>() {
+    private CommandTransformer<BsonDocument, MapReduceAsyncBatchCursor<T>> asyncTransformer(final AsyncConnection connection) {
+        return new CommandTransformer<BsonDocument, MapReduceAsyncBatchCursor<T>>() {
             @Override
-            public MapReduceAsyncBatchCursor<T> apply(final BsonDocument result) {
+            public MapReduceAsyncBatchCursor<T> apply(final BsonDocument result, final ServerAddress serverAddress) {
                 return new MapReduceInlineResultsAsyncCursor<T>(createQueryResult(result, connection.getDescription()), decoder,
                                                                 MapReduceHelper.createStatistics(result));
             }
@@ -389,6 +430,9 @@ public class MapReduceWithInlineResultsOperation<T> implements AsyncReadOperatio
         putIfNotZero(commandDocument, "limit", getLimit());
         putIfNotZero(commandDocument, "maxTimeMS", getMaxTime(MILLISECONDS));
         putIfTrue(commandDocument, "jsMode", isJsMode());
+        if (!readConcern.isServerDefault()) {
+            commandDocument.put("readConcern", readConcern.asDocument());
+        }
         return commandDocument;
     }
 

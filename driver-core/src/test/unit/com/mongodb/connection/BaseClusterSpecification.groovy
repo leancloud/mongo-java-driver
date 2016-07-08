@@ -23,10 +23,9 @@ import com.mongodb.MongoTimeoutException
 import com.mongodb.MongoWaitQueueFullException
 import com.mongodb.ReadPreference
 import com.mongodb.ServerAddress
-import com.mongodb.event.ClusterListener
-import com.mongodb.selector.PrimaryServerSelector
 import com.mongodb.selector.ReadPreferenceServerSelector
 import com.mongodb.selector.ServerAddressSelector
+import com.mongodb.selector.WritableServerSelector
 import spock.lang.Specification
 
 import java.util.concurrent.CountDownLatch
@@ -40,7 +39,6 @@ import static java.util.concurrent.TimeUnit.SECONDS
 
 class BaseClusterSpecification extends Specification {
 
-    private static final ClusterListener CLUSTER_LISTENER = new NoOpClusterListener()
     private final ServerAddress firstServer = new ServerAddress('localhost:27017')
     private final ServerAddress secondServer = new ServerAddress('localhost:27018')
     private final ServerAddress thirdServer = new ServerAddress('localhost:27019')
@@ -50,12 +48,12 @@ class BaseClusterSpecification extends Specification {
     def 'should compose server selector passed to selectServer with server selector in cluster settings'() {
         given:
         def cluster = new MultiServerCluster(new ClusterId(),
-                                             builder().mode(MULTIPLE)
-                                                      .hosts([firstServer, secondServer, thirdServer])
-                                                      .serverSelectionTimeout(1, SECONDS)
-                                                      .serverSelector(new ServerAddressSelector(firstServer))
-                                                      .build(),
-                                             factory, CLUSTER_LISTENER)
+                builder().mode(MULTIPLE)
+                        .hosts([firstServer, secondServer, thirdServer])
+                        .serverSelectionTimeout(1, SECONDS)
+                        .serverSelector(new ServerAddressSelector(firstServer))
+                        .build(),
+                factory)
         factory.sendNotification(firstServer, REPLICA_SET_SECONDARY, allServers)
         factory.sendNotification(secondServer, REPLICA_SET_SECONDARY, allServers)
         factory.sendNotification(thirdServer, REPLICA_SET_PRIMARY, allServers)
@@ -67,11 +65,11 @@ class BaseClusterSpecification extends Specification {
     def 'should use server selector passed to selectServer if server selector in cluster settings is null'() {
         given:
         def cluster = new MultiServerCluster(new ClusterId(),
-                                             builder().mode(MULTIPLE)
-                                                      .serverSelectionTimeout(1, SECONDS)
-                                                      .hosts([firstServer, secondServer, thirdServer])
-                                                      .build(),
-                                             factory, CLUSTER_LISTENER)
+                builder().mode(MULTIPLE)
+                        .serverSelectionTimeout(1, SECONDS)
+                        .hosts([firstServer, secondServer, thirdServer])
+                        .build(),
+                factory)
         factory.sendNotification(firstServer, REPLICA_SET_SECONDARY, allServers)
         factory.sendNotification(secondServer, REPLICA_SET_SECONDARY, allServers)
         factory.sendNotification(thirdServer, REPLICA_SET_PRIMARY, allServers)
@@ -83,11 +81,11 @@ class BaseClusterSpecification extends Specification {
     def 'should timeout with useful message'() {
         given:
         def cluster = new MultiServerCluster(new ClusterId(),
-                                             builder().mode(MULTIPLE)
-                                                      .hosts([firstServer, secondServer])
-                                                      .serverSelectionTimeout(1, MILLISECONDS)
-                                                      .build(),
-                                             factory, CLUSTER_LISTENER)
+                builder().mode(MULTIPLE)
+                        .hosts([firstServer, secondServer])
+                        .serverSelectionTimeout(1, MILLISECONDS)
+                        .build(),
+                factory)
 
         when:
         factory.sendNotification(firstServer, ServerDescription.builder().type(ServerType.UNKNOWN)
@@ -100,29 +98,30 @@ class BaseClusterSpecification extends Specification {
 
         then:
         def e = thrown(MongoTimeoutException)
-        e.getMessage() == 'Timed out after 1 ms while waiting to connect. Client view of cluster state is {type=UNKNOWN, ' +
-        'servers=[{address=localhost:27017, type=UNKNOWN, state=CONNECTING, exception={com.mongodb.MongoInternalException: oops}}, ' +
-        '{address=localhost:27018, type=UNKNOWN, state=CONNECTING}]'
+        e.getMessage().startsWith('Timed out after 1 ms while waiting to connect. Client view of cluster state is {type=UNKNOWN')
+        e.getMessage().contains('{address=localhost:27017, type=UNKNOWN, state=CONNECTING, ' +
+                'exception={com.mongodb.MongoInternalException: oops}}');
+        e.getMessage().contains('{address=localhost:27018, type=UNKNOWN, state=CONNECTING}');
 
         when:
-        cluster.selectServer(new PrimaryServerSelector())
+        cluster.selectServer(new WritableServerSelector())
 
         then:
         e = thrown(MongoTimeoutException)
-        e.getMessage() == 'Timed out after 1 ms while waiting for a server that matches PrimaryServerSelector. Client view of cluster ' +
-        'state is {type=UNKNOWN, servers=[{address=localhost:27017, type=UNKNOWN, state=CONNECTING, ' +
-        'exception={com.mongodb.MongoInternalException: oops}}, {address=localhost:27018, type=UNKNOWN, state=CONNECTING}]'
-
-
+        e.getMessage().startsWith('Timed out after 1 ms while waiting for a server that matches WritableServerSelector. ' +
+                'Client view of cluster state is {type=UNKNOWN')
+        e.getMessage().contains('{address=localhost:27017, type=UNKNOWN, state=CONNECTING, ' +
+                'exception={com.mongodb.MongoInternalException: oops}}');
+        e.getMessage().contains('{address=localhost:27018, type=UNKNOWN, state=CONNECTING}');
     }
 
     def 'should select server asynchronously'() {
         given:
         def cluster = new MultiServerCluster(new ClusterId(),
-                                             builder().mode(MULTIPLE)
-                                                      .hosts([firstServer, secondServer, thirdServer])
-                                                      .build(),
-                                             factory, CLUSTER_LISTENER)
+                builder().mode(MULTIPLE)
+                        .hosts([firstServer, secondServer, thirdServer])
+                        .build(),
+                factory)
         factory.sendNotification(firstServer, REPLICA_SET_SECONDARY, allServers)
 
         when:
@@ -150,10 +149,10 @@ class BaseClusterSpecification extends Specification {
     def 'when selecting server asynchronously should send MongoClientException to callback if cluster is closed before success'() {
         given:
         def cluster = new MultiServerCluster(new ClusterId(),
-                                             builder().mode(MULTIPLE)
-                                                      .hosts([firstServer, secondServer, thirdServer])
-                                                      .build(),
-                                             factory, CLUSTER_LISTENER)
+                builder().mode(MULTIPLE)
+                        .hosts([firstServer, secondServer, thirdServer])
+                        .build(),
+                factory)
 
         when:
         def serverLatch = selectServerAsync(cluster, firstServer)
@@ -170,11 +169,11 @@ class BaseClusterSpecification extends Specification {
     def 'when selecting server asynchronously should send MongoTimeoutException to callback after timeout period'() {
         given:
         def cluster = new MultiServerCluster(new ClusterId(),
-                                             builder().mode(MULTIPLE)
-                                                      .hosts([firstServer, secondServer, thirdServer])
-                                                      .serverSelectionTimeout(100, MILLISECONDS)
-                                                      .build(),
-                                             factory, CLUSTER_LISTENER)
+                builder().mode(MULTIPLE)
+                        .hosts([firstServer, secondServer, thirdServer])
+                        .serverSelectionTimeout(100, MILLISECONDS)
+                        .build(),
+                factory)
 
         when:
         selectServerAsyncAndGet(cluster, firstServer)
@@ -189,12 +188,12 @@ class BaseClusterSpecification extends Specification {
     def 'when selecting server asynchronously should send MongoWaitQueueFullException to callback if there are too many waiters'() {
         given:
         def cluster = new MultiServerCluster(new ClusterId(),
-                                             builder().mode(MULTIPLE)
-                                                      .hosts([firstServer, secondServer, thirdServer])
-                                                      .serverSelectionTimeout(1, SECONDS)
-                                                      .maxWaitQueueSize(1)
-                                                      .build(),
-                                             factory, CLUSTER_LISTENER)
+                builder().mode(MULTIPLE)
+                        .hosts([firstServer, secondServer, thirdServer])
+                        .serverSelectionTimeout(1, SECONDS)
+                        .maxWaitQueueSize(1)
+                        .build(),
+                factory)
 
         when:
         selectServerAsync(cluster, firstServer)

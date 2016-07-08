@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,8 @@ import com.mongodb.bulk.BulkWriteResult;
 import com.mongodb.bulk.DeleteRequest;
 import com.mongodb.bulk.InsertRequest;
 import com.mongodb.bulk.UpdateRequest;
+import com.mongodb.diagnostics.logging.Logger;
+import com.mongodb.diagnostics.logging.Loggers;
 import org.bson.BsonDocument;
 import org.bson.FieldNameValidator;
 import org.bson.codecs.Decoder;
@@ -34,7 +36,9 @@ import static com.mongodb.assertions.Assertions.isTrue;
 import static com.mongodb.connection.ServerType.SHARD_ROUTER;
 import static com.mongodb.internal.async.ErrorHandlingResultCallback.errorHandlingCallback;
 
+@SuppressWarnings("deprecation")  // because this class implements deprecated methods
 class DefaultServerConnection extends AbstractReferenceCounted implements Connection, AsyncConnection {
+    private static final Logger LOGGER = Loggers.getLogger("connection");
     private final InternalConnection wrapped;
     private final ProtocolExecutor protocolExecutor;
     private final ClusterConnectionMode clusterConnectionMode;
@@ -135,45 +139,51 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
     @Override
     public BulkWriteResult insertCommand(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                          final List<InsertRequest> inserts) {
-    	long begin = System.currentTimeMillis();
-    	try {
-    		MongoQueryAnalyzer.beforeGet(namespace.getDatabaseName());
-    		return executeProtocol(new InsertCommandProtocol(namespace, ordered, writeConcern, inserts));
-    	} finally {
-    		MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
-    		long avgCost = (System.currentTimeMillis() - begin) / inserts.size();
-    		for (int i=0; i<inserts.size(); i++) {
-    			MongoQueryAnalyzer.logQuery("insert", namespace.getFullName(), new BsonDocument(), avgCost);
-    		}
-    	}
+        return insertCommand(namespace, ordered, writeConcern, null, inserts);
+    }
+
+    @Override
+    public BulkWriteResult insertCommand(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
+                                         final Boolean bypassDocumentValidation, final List<InsertRequest> inserts) {
+        return executeProtocol(new InsertCommandProtocol(namespace, ordered, writeConcern, bypassDocumentValidation, inserts));
     }
 
     @Override
     public void insertCommandAsync(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                    final List<InsertRequest> inserts, final SingleResultCallback<BulkWriteResult> callback) {
-        executeProtocolAsync(new InsertCommandProtocol(namespace, ordered, writeConcern, inserts), callback);
+        insertCommandAsync(namespace, ordered, writeConcern, null, inserts, callback);
+    }
+
+    @Override
+    public void insertCommandAsync(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
+                                   final Boolean bypassDocumentValidation, final List<InsertRequest> inserts,
+                                   final SingleResultCallback<BulkWriteResult> callback) {
+        executeProtocolAsync(new InsertCommandProtocol(namespace, ordered, writeConcern, bypassDocumentValidation, inserts), callback);
     }
 
     @Override
     public BulkWriteResult updateCommand(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                          final List<UpdateRequest> updates) {
-    	long begin = System.currentTimeMillis();
-    	try {
-    		MongoQueryAnalyzer.beforeGet(namespace.getDatabaseName());
-    		return executeProtocol(new UpdateCommandProtocol(namespace, ordered, writeConcern, updates));
-    	} finally {
-    		MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
-    		long avgCost = (System.currentTimeMillis() - begin) / updates.size();
-    		for (UpdateRequest r : updates) {
-    			MongoQueryAnalyzer.logQuery("update", namespace.getFullName(), r.getFilter(), avgCost);
-    		}
-    	}
+        return updateCommand(namespace, ordered, writeConcern, null, updates);
+    }
+
+    @Override
+    public BulkWriteResult updateCommand(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
+                                         final Boolean bypassDocumentValidation, final List<UpdateRequest> updates) {
+        return executeProtocol(new UpdateCommandProtocol(namespace, ordered, writeConcern, bypassDocumentValidation, updates));
     }
 
     @Override
     public void updateCommandAsync(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
                                    final List<UpdateRequest> updates, final SingleResultCallback<BulkWriteResult> callback) {
-        executeProtocolAsync(new UpdateCommandProtocol(namespace, ordered, writeConcern, updates), callback);
+        updateCommandAsync(namespace, ordered, writeConcern, null, updates, callback);
+    }
+
+    @Override
+    public void updateCommandAsync(final MongoNamespace namespace, final boolean ordered, final WriteConcern writeConcern,
+                                   final Boolean bypassDocumentValidation, final List<UpdateRequest> updates,
+                                   final SingleResultCallback<BulkWriteResult> callback) {
+        executeProtocolAsync(new UpdateCommandProtocol(namespace, ordered, writeConcern, bypassDocumentValidation, updates), callback);
     }
 
     @Override
@@ -251,6 +261,22 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
     }
 
     @Override
+    public <T> QueryResult<T> query(final MongoNamespace namespace, final BsonDocument queryDocument, final BsonDocument fields,
+                                    final int skip, final int limit, final int batchSize,
+                                    final boolean slaveOk, final boolean tailableCursor,
+                                    final boolean awaitData, final boolean noCursorTimeout,
+                                    final boolean partial, final boolean oplogReplay,
+                                    final Decoder<T> resultDecoder) {
+        return executeProtocol(new QueryProtocol<T>(namespace, skip, limit, batchSize, queryDocument, fields, resultDecoder)
+                               .tailableCursor(tailableCursor)
+                               .slaveOk(getSlaveOk(slaveOk))
+                               .oplogReplay(oplogReplay)
+                               .noCursorTimeout(noCursorTimeout)
+                               .awaitData(awaitData)
+                               .partial(partial));
+    }
+
+    @Override
     public <T> void queryAsync(final MongoNamespace namespace, final BsonDocument queryDocument, final BsonDocument fields,
                                final int numberToReturn, final int skip,
                                final boolean slaveOk, final boolean tailableCursor, final boolean awaitData, final boolean noCursorTimeout,
@@ -258,6 +284,20 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
                                final boolean oplogReplay, final Decoder<T> resultDecoder,
                                final SingleResultCallback<QueryResult<T>> callback) {
         executeProtocolAsync(new QueryProtocol<T>(namespace, skip, numberToReturn, queryDocument, fields, resultDecoder)
+                             .tailableCursor(tailableCursor)
+                             .slaveOk(getSlaveOk(slaveOk))
+                             .oplogReplay(oplogReplay)
+                             .noCursorTimeout(noCursorTimeout)
+                             .awaitData(awaitData)
+                             .partial(partial), callback);
+    }
+
+    @Override
+    public <T> void queryAsync(final MongoNamespace namespace, final BsonDocument queryDocument, final BsonDocument fields, final int skip,
+                               final int limit, final int batchSize, final boolean slaveOk, final boolean tailableCursor,
+                               final boolean awaitData, final boolean noCursorTimeout, final boolean partial, final boolean oplogReplay,
+                               final Decoder<T> resultDecoder, final SingleResultCallback<QueryResult<T>> callback) {
+        executeProtocolAsync(new QueryProtocol<T>(namespace, skip, limit, batchSize, queryDocument, fields, resultDecoder)
                              .tailableCursor(tailableCursor)
                              .slaveOk(getSlaveOk(slaveOk))
                              .oplogReplay(oplogReplay)
@@ -280,12 +320,22 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
 
     @Override
     public void killCursor(final List<Long> cursors) {
-        executeProtocol(new KillCursorProtocol(cursors));
+        killCursor(null, cursors);
+    }
+
+    @Override
+    public void killCursor(final MongoNamespace namespace, final List<Long> cursors) {
+        executeProtocol(new KillCursorProtocol(namespace, cursors));
     }
 
     @Override
     public void killCursorAsync(final List<Long> cursors, final SingleResultCallback<Void> callback) {
-        executeProtocolAsync(new KillCursorProtocol(cursors), callback);
+        killCursorAsync(null, cursors, callback);
+    }
+
+    @Override
+    public void killCursorAsync(final MongoNamespace namespace, final List<Long> cursors, final SingleResultCallback<Void> callback) {
+        executeProtocolAsync(new KillCursorProtocol(namespace, cursors), callback);
     }
 
     private boolean getSlaveOk(final boolean slaveOk) {
@@ -298,11 +348,11 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
     }
 
     private <T> void executeProtocolAsync(final Protocol<T> protocol, final SingleResultCallback<T> callback) {
-        SingleResultCallback<T> wrappedCallback = errorHandlingCallback(callback);
+        SingleResultCallback<T> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
         try {
-            protocolExecutor.executeAsync(protocol, this.wrapped, wrappedCallback);
+            protocolExecutor.executeAsync(protocol, this.wrapped, errHandlingCallback);
         } catch (Throwable t) {
-            wrappedCallback.onResult(null, t);
+            errHandlingCallback.onResult(null, t);
         }
     }
 }

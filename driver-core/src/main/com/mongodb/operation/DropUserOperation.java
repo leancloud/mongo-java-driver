@@ -25,6 +25,7 @@ import com.mongodb.binding.WriteBinding;
 import com.mongodb.bulk.DeleteRequest;
 import com.mongodb.connection.AsyncConnection;
 import com.mongodb.connection.Connection;
+import com.mongodb.operation.CommandOperationHelper.VoidTransformer;
 import org.bson.BsonDocument;
 import org.bson.BsonString;
 
@@ -34,7 +35,7 @@ import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommand
 import static com.mongodb.operation.CommandOperationHelper.executeWrappedCommandProtocolAsync;
 import static com.mongodb.operation.OperationHelper.AsyncCallableWithConnection;
 import static com.mongodb.operation.OperationHelper.CallableWithConnection;
-import static com.mongodb.operation.OperationHelper.VoidTransformer;
+import static com.mongodb.operation.OperationHelper.LOGGER;
 import static com.mongodb.operation.OperationHelper.releasingCallback;
 import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionTwoDotSix;
 import static com.mongodb.operation.OperationHelper.withConnection;
@@ -66,7 +67,7 @@ public class DropUserOperation implements AsyncWriteOperation<Void>, WriteOperat
             @Override
             public Void call(final Connection connection) {
                 if (serverIsAtLeastVersionTwoDotSix(connection.getDescription())) {
-                    executeWrappedCommandProtocol(databaseName, getCommand(), connection);
+                    executeWrappedCommandProtocol(binding, databaseName, getCommand(), connection);
                 } else {
                     connection.delete(getNamespace(), true, WriteConcern.ACKNOWLEDGED, asList(getDeleteRequest()));
                 }
@@ -80,14 +81,15 @@ public class DropUserOperation implements AsyncWriteOperation<Void>, WriteOperat
         withConnection(binding, new AsyncCallableWithConnection() {
             @Override
             public void call(final AsyncConnection connection, final Throwable t) {
+                SingleResultCallback<Void> errHandlingCallback = errorHandlingCallback(callback, LOGGER);
                 if (t != null) {
-                    errorHandlingCallback(callback).onResult(null, t);
+                    errHandlingCallback.onResult(null, t);
                 } else {
-                    final SingleResultCallback<Void> wrappedCallback = releasingCallback(errorHandlingCallback(callback), connection);
+                    final SingleResultCallback<Void> wrappedCallback = releasingCallback(errHandlingCallback, connection);
 
                     if (serverIsAtLeastVersionTwoDotSix(connection.getDescription())) {
-                        executeWrappedCommandProtocolAsync(databaseName, getCommand(), connection, new VoidTransformer<BsonDocument>(),
-                                                           wrappedCallback);
+                        executeWrappedCommandProtocolAsync(binding, databaseName, getCommand(), connection,
+                                new VoidTransformer<BsonDocument>(), wrappedCallback);
                     } else {
                         connection.deleteAsync(getNamespace(), true, WriteConcern.ACKNOWLEDGED, asList(getDeleteRequest()),
                                                new SingleResultCallback<WriteConcernResult>() {

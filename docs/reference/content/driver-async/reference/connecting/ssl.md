@@ -10,24 +10,31 @@ title = "SSL"
 
 ## SSL
 
-The Java driver supports SSL connections to MongoDB servers using the underlying support for SSL provided by the JDK. You can configure 
-the driver to use SSL either with `ConnectionString` or with `MongoClientSettings`.  
-
-With `ConnectionString`, specify `ssl=true as a query parameter, as in:
-
-```java
-new ConnectionString("mongodb://localhost/?ssl=true")
-```
-
-With `MongoClientSettings`, set the sslEnabled property to true, as in:
+The async Java driver supports SSL connections to MongoDB servers using the underlying support for SSL provided by
+[Netty](http://netty .io/). You can configure the driver to use SSL with `MongoClientSettings` by setting the sslEnabled property to true 
+and the stream factory to [`NettyStreamFactoryFactory`]({{< apiref "com/mongodb/connection/netty/NettyStreamFactoryFactory" >}}), as in:
 
 ```java
-MongoClientSettings.builder()                                                  
-                   .sslSettings(SslSettings.builder()
-                                           .enabled(true)
-                                           .build())   
-                   .build()                                                    
+MongoClient client = MongoClients.create(MongoClientSettings.builder()
+                                                 .clusterSettings(ClusterSettings.builder()
+                                                                          .hosts(Arrays.asList(new ServerAddress()))
+                                                                          .build())
+                                                 .sslSettings(SslSettings.builder()
+                                                                      .enabled(true)
+                                                                      .build())
+                                                 .streamFactoryFactory(NettyStreamFactoryFactory.builder().build())
+                                                 .build());
+
 ```
+
+or via connection string:
+
+```java
+MongoClient client = MongoClients.create("mongodb://localhost/?ssl=true&streamType=netty");
+```
+
+See [Netty Configuration]({{< relref "driver-async/reference/connecting/connection-settings.md#netty-configuration" >}}) for details on 
+configuring Netty.
 
 ### Host name verification
 
@@ -37,13 +44,23 @@ constructing a `MongoClient`.  However, this host name verification requires a J
  to disable host name verification, you must expicitly indicate this in `SslSettings` using the `invalidHostNameAllowed` property:
    
 ```java
-MongoClientSettings.builder()                                             
-                   .sslSettings(SslSettings.builder()                     
-                                           .enabled(true)                 
-                                           .invalidHostNameAllowed(true)  
-                                           .build())                      
-                   .build()                                              
-``` 
+MongoClient client = MongoClients.create(MongoClientSettings.builder()
+                                                 .clusterSettings(ClusterSettings.builder()
+                                                                          .hosts(Arrays.asList(new ServerAddress()))
+                                                                          .build())
+                                                  .sslSettings(SslSettings.builder()
+                                                                       .enabled(true)
+                                                                       .invalidHostNameAllowed(true)
+                                                                       .build())
+                                                  .streamFactoryFactory(NettyStreamFactoryFactory.builder().build())
+                                                  .build());
+```
+
+or via connection string:
+
+```java
+MongoClient client = MongoClients.create("mongodb://localhost/?ssl=true&sslInvalidHostNameAllowed=true&streamType=netty");
+```
 
 ### JVM system properties
 

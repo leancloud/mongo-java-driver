@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 MongoDB, Inc.
+ * Copyright (c) 2008-2015 MongoDB, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,14 +17,22 @@
 package com.mongodb;
 
 import com.mongodb.annotations.Immutable;
+import com.mongodb.annotations.NotThreadSafe;
 import com.mongodb.connection.ConnectionPoolSettings;
 import com.mongodb.connection.ServerSettings;
 import com.mongodb.connection.SocketSettings;
 import com.mongodb.connection.SslSettings;
+import com.mongodb.event.ClusterListener;
+import com.mongodb.event.CommandListener;
+import com.mongodb.event.ServerListener;
+import com.mongodb.event.ServerMonitorListener;
 import org.bson.codecs.configuration.CodecRegistry;
 
 import javax.net.SocketFactory;
 import javax.net.ssl.SSLSocketFactory;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 import static com.mongodb.assertions.Assertions.isTrueArgument;
 import static com.mongodb.assertions.Assertions.notNull;
@@ -45,6 +53,7 @@ public class MongoClientOptions {
     private final String description;
     private final ReadPreference readPreference;
     private final WriteConcern writeConcern;
+    private final ReadConcern readConcern;
     private final CodecRegistry codecRegistry;
 
     private final int minConnectionsPerHost;
@@ -77,6 +86,10 @@ public class MongoClientOptions {
     private final ServerSettings serverSettings;
     private final SocketSettings heartbeatSocketSettings;
     private final SslSettings sslSettings;
+    private final List<CommandListener> commandListeners;
+    private final List<ClusterListener> clusterListeners;
+    private final List<ServerListener> serverListeners;
+    private final List<ServerMonitorListener> serverMonitorListeners;
 
     private MongoClientOptions(final Builder builder) {
         description = builder.description;
@@ -92,6 +105,7 @@ public class MongoClientOptions {
         socketKeepAlive = builder.socketKeepAlive;
         readPreference = builder.readPreference;
         writeConcern = builder.writeConcern;
+        readConcern = builder.readConcern;
         codecRegistry = builder.codecRegistry;
         sslEnabled = builder.sslEnabled;
         sslInvalidHostNameAllowed = builder.sslInvalidHostNameAllowed;
@@ -106,6 +120,10 @@ public class MongoClientOptions {
         dbEncoderFactory = builder.dbEncoderFactory;
         socketFactory = builder.socketFactory;
         cursorFinalizerEnabled = builder.cursorFinalizerEnabled;
+        commandListeners = builder.commandListeners;
+        clusterListeners = builder.clusterListeners;
+        serverListeners = builder.serverListeners;
+        serverMonitorListeners = builder.serverMonitorListeners;
 
         connectionPoolSettings = ConnectionPoolSettings.builder()
                                                        .minSize(getMinConnectionsPerHost())
@@ -127,10 +145,19 @@ public class MongoClientOptions {
                                                 .readTimeout(getHeartbeatSocketTimeout(), MILLISECONDS)
                                                 .keepAlive(isSocketKeepAlive())
                                                 .build();
-        serverSettings = ServerSettings.builder()
-                                       .heartbeatFrequency(getHeartbeatFrequency(), MILLISECONDS)
-                                       .minHeartbeatFrequency(getMinHeartbeatFrequency(), MILLISECONDS)
-                                       .build();
+
+        ServerSettings.Builder serverSettingsBuilder = ServerSettings.builder()
+                                                               .heartbeatFrequency(getHeartbeatFrequency(), MILLISECONDS)
+                                                               .minHeartbeatFrequency(getMinHeartbeatFrequency(), MILLISECONDS);
+
+        for (ServerListener cur : serverListeners) {
+            serverSettingsBuilder.addServerListener(cur);
+        }
+        for (ServerMonitorListener cur : serverMonitorListeners) {
+            serverSettingsBuilder.addServerMonitorListener(cur);
+        }
+
+        serverSettings = serverSettingsBuilder.build();
 
         try {
             sslSettings = SslSettings.builder()
@@ -424,6 +451,18 @@ public class MongoClientOptions {
     }
 
     /**
+     * <p>The read concern to use.</p>
+     *
+     * @return the read concern
+     * @since 3.2
+     * @mongodb.server.release 3.2
+     * @mongodb.driver.manual reference/readConcern/ Read Concern
+     */
+    public ReadConcern getReadConcern() {
+        return readConcern;
+    }
+
+    /**
      * <p>The codec registry to use.  By default, a {@code MongoClient} will be able to encode and decode instances of {@code
      * Document}.</p>
      *
@@ -436,6 +475,46 @@ public class MongoClientOptions {
      */
     public CodecRegistry getCodecRegistry() {
         return codecRegistry;
+    }
+
+    /**
+     * Gets the list of added {@code CommandListener}. The default is an empty list.
+     *
+     * @return the unmodifiable list of command listeners
+     * @since 3.1
+     */
+    public List<CommandListener> getCommandListeners() {
+        return Collections.unmodifiableList(commandListeners);
+    }
+
+    /**
+     * Gets the list of added {@code ClusterListener}. The default is an empty list.
+     *
+     * @return the unmodifiable list of cluster listeners
+     * @since 3.3
+     */
+    public List<ClusterListener> getClusterListeners() {
+        return Collections.unmodifiableList(clusterListeners);
+    }
+
+    /**
+     * Gets the list of added {@code ServerListener}. The default is an empty list.
+     *
+     * @return the unmodifiable list of server listeners
+     * @since 3.3
+     */
+    public List<ServerListener> getServerListeners() {
+        return Collections.unmodifiableList(serverListeners);
+    }
+
+    /**
+     * Gets the list of added {@code ServerMonitorListener}. The default is an empty list.
+     *
+     * @return the unmodifiable list of server monitor listeners
+     * @since 3.3
+     */
+    public List<ServerMonitorListener> getServerMonitorListeners() {
+        return Collections.unmodifiableList(serverMonitorListeners);
     }
 
     /**
@@ -593,7 +672,25 @@ public class MongoClientOptions {
         if (!readPreference.equals(that.readPreference)) {
             return false;
         }
+        if (!writeConcern.equals(that.writeConcern)) {
+            return false;
+        }
+        if (!readConcern.equals(that.readConcern)) {
+            return false;
+        }
         if (!codecRegistry.equals(that.codecRegistry)) {
+            return false;
+        }
+        if (!commandListeners.equals(that.commandListeners)) {
+            return false;
+        }
+        if (!clusterListeners.equals(that.clusterListeners)) {
+            return false;
+        }
+        if (!serverListeners.equals(that.serverListeners)) {
+            return false;
+        }
+        if (!serverMonitorListeners.equals(that.serverMonitorListeners)) {
             return false;
         }
         if (requiredReplicaSetName != null ? !requiredReplicaSetName.equals(that.requiredReplicaSetName)
@@ -612,7 +709,12 @@ public class MongoClientOptions {
         int result = description != null ? description.hashCode() : 0;
         result = 31 * result + readPreference.hashCode();
         result = 31 * result + writeConcern.hashCode();
+        result = 31 * result + (readConcern != null ? readConcern.hashCode() : 0);
         result = 31 * result + codecRegistry.hashCode();
+        result = 31 * result + commandListeners.hashCode();
+        result = 31 * result + clusterListeners.hashCode();
+        result = 31 * result + serverListeners.hashCode();
+        result = 31 * result + serverMonitorListeners.hashCode();
         result = 31 * result + minConnectionsPerHost;
         result = 31 * result + maxConnectionsPerHost;
         result = 31 * result + threadsAllowedToBlockForConnectionMultiplier;
@@ -645,7 +747,12 @@ public class MongoClientOptions {
                + "description='" + description + '\''
                + ", readPreference=" + readPreference
                + ", writeConcern=" + writeConcern
+               + ", readConcern=" + readConcern
                + ", codecRegistry=" + codecRegistry
+               + ", commandListeners=" + commandListeners
+               + ", clusterListeners=" + clusterListeners
+               + ", serverListeners=" + serverListeners
+               + ", serverMonitorListeners=" + serverMonitorListeners
                + ", minConnectionsPerHost=" + minConnectionsPerHost
                + ", maxConnectionsPerHost=" + maxConnectionsPerHost
                + ", threadsAllowedToBlockForConnectionMultiplier=" + threadsAllowedToBlockForConnectionMultiplier
@@ -681,11 +788,17 @@ public class MongoClientOptions {
      *
      * @since 2.10.0
      */
+    @NotThreadSafe
     public static class Builder {
         private String description;
         private ReadPreference readPreference = ReadPreference.primary();
         private WriteConcern writeConcern = WriteConcern.ACKNOWLEDGED;
+        private ReadConcern readConcern = ReadConcern.DEFAULT;
         private CodecRegistry codecRegistry = MongoClient.getDefaultCodecRegistry();
+        private final List<CommandListener> commandListeners = new ArrayList<CommandListener>();
+        private final List<ClusterListener> clusterListeners = new ArrayList<ClusterListener>();
+        private final List<ServerListener> serverListeners = new ArrayList<ServerListener>();
+        private final List<ServerMonitorListener> serverMonitorListeners = new ArrayList<ServerMonitorListener>();
 
         private int minConnectionsPerHost;
         private int maxConnectionsPerHost = 100;
@@ -743,6 +856,7 @@ public class MongoClientOptions {
             socketKeepAlive = options.isSocketKeepAlive();
             readPreference = options.getReadPreference();
             writeConcern = options.getWriteConcern();
+            readConcern = options.getReadConcern();
             codecRegistry = options.getCodecRegistry();
             sslEnabled = options.isSslEnabled();
             sslInvalidHostNameAllowed = options.isSslInvalidHostNameAllowed();
@@ -757,6 +871,10 @@ public class MongoClientOptions {
             dbEncoderFactory = options.getDbEncoderFactory();
             socketFactory = options.getSocketFactory();
             cursorFinalizerEnabled = options.isCursorFinalizerEnabled();
+            commandListeners.addAll(options.getCommandListeners());
+            clusterListeners.addAll(options.getClusterListeners());
+            serverListeners.addAll(options.getServerListeners());
+            serverMonitorListeners.addAll(options.getServerMonitorListeners());
         }
 
         /**
@@ -960,6 +1078,22 @@ public class MongoClientOptions {
             return this;
         }
 
+
+        /**
+         * Sets the read concern.
+         *
+         * @param readConcern the read concern.
+         * @return this
+         * @see MongoClientOptions#getReadConcern()
+         * @since 3.2
+         * @mongodb.server.release 3.2
+         * @mongodb.driver.manual reference/readConcern/ Read Concern
+         */
+        public Builder readConcern(final ReadConcern readConcern) {
+            this.readConcern = notNull("readConcern", readConcern);
+            return this;
+        }
+
         /**
          * Sets the codec registry
          *
@@ -975,6 +1109,59 @@ public class MongoClientOptions {
             this.codecRegistry = notNull("codecRegistry", codecRegistry);
             return this;
         }
+
+        /**
+         * Adds the given command listener.
+         *
+         * @param commandListener the non-null command listener
+         * @return this
+         * @since 3.1
+         */
+        public Builder addCommandListener(final CommandListener commandListener) {
+            notNull("commandListener", commandListener);
+            commandListeners.add(commandListener);
+            return this;
+        }
+
+        /**
+         * Adds the given cluster listener.
+         *
+         * @param clusterListener the non-null cluster listener
+         * @return this
+         * @since 3.3
+         */
+        public Builder addClusterListener(final ClusterListener clusterListener) {
+            notNull("clusterListener", clusterListener);
+            clusterListeners.add(clusterListener);
+            return this;
+        }
+
+        /**
+         * Adds the given server listener.
+         *
+         * @param serverListener the non-null server listener
+         * @return this
+         * @since 3.3
+         */
+        public Builder addServerListener(final ServerListener serverListener) {
+            notNull("serverListener", serverListener);
+            serverListeners.add(serverListener);
+            return this;
+        }
+
+        /**
+         * Adds the given server monitro listener.
+         *
+         * @param serverMonitorListener the non-null server monitor listener
+         * @return this
+         * @since 3.3
+         */
+        public Builder addServerMonitorListener(final ServerMonitorListener serverMonitorListener) {
+            notNull("serverMonitorListener", serverMonitorListener);
+            serverMonitorListeners.add(serverMonitorListener);
+            return this;
+        }
+
 
         /**
          * Sets the socket factory.

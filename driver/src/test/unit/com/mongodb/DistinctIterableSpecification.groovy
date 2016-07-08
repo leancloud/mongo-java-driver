@@ -39,11 +39,13 @@ class DistinctIterableSpecification extends Specification {
     def namespace = new MongoNamespace('db', 'coll')
     def codecRegistry = fromProviders([new ValueCodecProvider(), new DocumentCodecProvider(), new BsonValueCodecProvider()])
     def readPreference = secondary()
+    def readConcern = ReadConcern.DEFAULT
 
     def 'should build the expected DistinctOperation'() {
         given:
         def executor = new TestOperationExecutor([null, null]);
-        def distinctIterable = new DistinctIterableImpl(namespace, Document, Document, codecRegistry, readPreference, executor, 'field')
+        def distinctIterable = new DistinctIterableImpl(namespace, Document, Document, codecRegistry, readPreference, readConcern,
+                executor, 'field', new BsonDocument())
 
         when: 'default input should be as expected'
         distinctIterable.iterator()
@@ -52,7 +54,7 @@ class DistinctIterableSpecification extends Specification {
         def readPreference = executor.getReadPreference()
 
         then:
-        expect operation, isTheSameAs(new DistinctOperation<Document>(namespace, 'field', new DocumentCodec()));
+        expect operation, isTheSameAs(new DistinctOperation<Document>(namespace, 'field', new DocumentCodec()).filter(new BsonDocument()));
         readPreference == secondary()
 
         when: 'overriding initial options'
@@ -70,7 +72,8 @@ class DistinctIterableSpecification extends Specification {
         given:
         def codecRegistry = fromProviders([new ValueCodecProvider(), new BsonValueCodecProvider()])
         def executor = new TestOperationExecutor([new MongoException('failure')])
-        def distinctIterable = new DistinctIterableImpl(namespace, Document, BsonDocument, codecRegistry, readPreference, executor, 'field')
+        def distinctIterable = new DistinctIterableImpl(namespace, Document, BsonDocument, codecRegistry, readPreference,
+                readConcern, executor, 'field', new BsonDocument())
 
         when: 'The operation fails with an exception'
         distinctIterable.iterator()
@@ -106,7 +109,8 @@ class DistinctIterableSpecification extends Specification {
             }
         }
         def executor = new TestOperationExecutor([cursor(), cursor(), cursor(), cursor()]);
-        def mongoIterable = new DistinctIterableImpl(namespace, Document, Document, codecRegistry, readPreference, executor, 'field')
+        def mongoIterable = new DistinctIterableImpl(namespace, Document, Document, codecRegistry, readPreference, ReadConcern.LOCAL,
+                executor, 'field', new BsonDocument())
 
         when:
         def results = mongoIterable.first()
