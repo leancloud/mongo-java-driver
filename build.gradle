@@ -45,7 +45,7 @@ configure(subprojects.findAll { it.name != 'util' }) {
     evaluationDependsOn(':util')
 
     group = 'org.mongodb'
-    version = '3.3.0-query-log'
+    version = '3.3.0-querylog-SNAPSHOT'
     sourceCompatibility = JavaVersion.VERSION_1_6
     targetCompatibility = JavaVersion.VERSION_1_6
 
@@ -220,7 +220,6 @@ configure(subprojects.findAll { it.name != 'util' && it.name != 'mongo-java-driv
     task testCoverage(dependsOn: test)
 
     /* Code quality */
-
 
     findbugs {
         excludeFilter = new File(configDir, 'findbugs-exclude.xml')
