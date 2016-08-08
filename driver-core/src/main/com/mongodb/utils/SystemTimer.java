@@ -2,11 +2,20 @@ package com.mongodb.utils;
 
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
 public class SystemTimer {
 	private final static ScheduledExecutorService executor = Executors
-			.newSingleThreadScheduledExecutor();
+			.newSingleThreadScheduledExecutor(new ThreadFactory() {
+				
+				@Override
+				public Thread newThread(Runnable r) {
+					Thread t = new Thread(r);
+					t.setDaemon(true);
+					return t;
+				}
+			});
 
 	private static final long tickUnit = Long.parseLong(System.getProperty(
 			"mongodb.systimer.tick.mills", "5"));
