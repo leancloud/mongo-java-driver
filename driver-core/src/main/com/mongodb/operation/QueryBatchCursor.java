@@ -24,6 +24,7 @@ import com.mongodb.binding.ConnectionSource;
 import com.mongodb.connection.Connection;
 import com.mongodb.connection.QueryResult;
 import com.mongodb.internal.validator.NoOpFieldNameValidator;
+
 import org.bson.BsonDocument;
 import org.bson.BsonInt32;
 import org.bson.BsonInt64;
@@ -53,6 +54,10 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
     private List<T> nextBatch;
     private int count;
     private boolean closed;
+    private long bytes; //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+    
+    private static final long MAX_CURSOR_QUERY_SIZE_BYTES = Long.parseLong(System
+        .getenv("MONGO_MAX_CURSOR_QUERY_SIZE_BYTES") != null ? System.getenv("MONGO_MAX_CURSOR_QUERY_SIZE_BYTES") : "-1");
 
     QueryBatchCursor(final QueryResult<T> firstQueryResult, final int limit, final int batchSize, final Decoder<T> decoder) {
         this(firstQueryResult, limit, batchSize, decoder, (ConnectionSource) null);
@@ -81,9 +86,23 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
         }
 
         initFromQueryResult(firstQueryResult);
-        if (limitReached()) {
+        if (limitReached() || bytesReached()) {
             killCursor(connection);
         }
+    }
+    
+
+    /**
+     * Reached MAX_CURSOR_QUERY_SIZE_BYTES
+     * 
+     * @author dennis (xzhuang@leancloud.cn)
+     * @return
+     */
+    private boolean bytesReached() {
+        if (MAX_CURSOR_QUERY_SIZE_BYTES > 0) {
+            return bytes >= MAX_CURSOR_QUERY_SIZE_BYTES;
+        }
+        return false;
     }
 
     @Override
@@ -97,6 +116,10 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
         }
 
         if (limitReached()) {
+            return false;
+        }
+        
+        if (bytesReached()) {
             return false;
         }
 
@@ -176,6 +199,10 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
         if (limitReached()) {
             return false;
         }
+        
+        if (bytesReached()) {
+            return false;
+        }
 
         if (serverCursor != null) {
             getMore();
@@ -220,7 +247,7 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
                                                        getNumberToReturn(limit, batchSize, count),
                                                        decoder));
             }
-            if (limitReached()) {
+            if (limitReached() || bytesReached()) {
                 killCursor(connection);
             }
         } finally {
@@ -247,6 +274,8 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
         serverCursor = queryResult.getCursor();
         nextBatch = queryResult.getResults().isEmpty() ? null : queryResult.getResults();
         count += queryResult.getResults().size();
+        //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+        bytes += queryResult.getBytes();
     }
 
     private void initFromCommandResult(final BsonDocument getMoreCommandResultDocument) {

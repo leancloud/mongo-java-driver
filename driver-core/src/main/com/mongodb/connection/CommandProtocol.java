@@ -22,8 +22,10 @@ import com.mongodb.async.SingleResultCallback;
 import com.mongodb.diagnostics.logging.Logger;
 import com.mongodb.diagnostics.logging.Loggers;
 import com.mongodb.event.CommandListener;
+
 import org.bson.BsonBinaryReader;
 import org.bson.BsonDocument;
+import org.bson.CountedBytes;
 import org.bson.FieldNameValidator;
 import org.bson.codecs.BsonDocumentCodec;
 import org.bson.codecs.Decoder;
@@ -110,12 +112,17 @@ class CommandProtocol<T> implements Protocol<T> {
         try {
             sendMessage(commandMessage, connection);
             responseBuffers = connection.receiveMessage(commandMessage.getId());
+            //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+            long bytes = responseBuffers.getBodyByteBuffer().remaining();
             if (!ProtocolHelper.isCommandOk(new BsonBinaryReader(new ByteBufferBsonInput(responseBuffers.getBodyByteBuffer())))) {
                 throw getCommandFailureException(getResponseDocument(responseBuffers, commandMessage, new BsonDocumentCodec()),
                         connection.getDescription().getServerAddress());
             }
-
+            //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
             T retval = getResponseDocument(responseBuffers, commandMessage, commandResultDecoder);
+            if (retval instanceof CountedBytes) {
+                ((CountedBytes) retval).setBytes(bytes);
+            }
 
             if (commandListener != null) {
                 sendSucceededEvent(connection.getDescription(), startTimeNanos, commandMessage,
@@ -251,6 +258,8 @@ class CommandProtocol<T> implements Protocol<T> {
         @Override
         protected void callCallback(final ResponseBuffers responseBuffers, final Throwable throwableFromCallback) {
             try {
+              //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+                long bytes = responseBuffers.getBodyByteBuffer().remaining();
                 if (throwableFromCallback != null) {
                     throw throwableFromCallback;
                 }
@@ -268,7 +277,12 @@ class CommandProtocol<T> implements Protocol<T> {
                     sendSucceededEvent(connectionDescription, startTimeNanos, message,
                             getResponseDocument(responseBuffers, message, new RawBsonDocumentCodec()));
                 }
-                callback.onResult(getResponseDocument(responseBuffers, message, commandResultDecoder), null);
+              //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+                T retval = getResponseDocument(responseBuffers, message, commandResultDecoder);
+                if (retval instanceof CountedBytes) {
+                    ((CountedBytes) retval).setBytes(bytes);
+                }
+                callback.onResult(retval, null);
 
             } catch (Throwable t) {
                 sendFailedEvent(connectionDescription, startTimeNanos, message, t);

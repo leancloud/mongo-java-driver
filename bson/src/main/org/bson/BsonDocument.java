@@ -45,10 +45,21 @@ import static java.lang.String.format;
  *
  * @since 3.0
  */
-public class BsonDocument extends BsonValue implements Map<String, BsonValue>, Cloneable, Bson, Serializable {
+public class BsonDocument extends BsonValue implements Map<String, BsonValue>, Cloneable, Bson, Serializable, CountedBytes {
+
     private static final long serialVersionUID = 1L;
 
     private final Map<String, BsonValue> map = new LinkedHashMap<String, BsonValue>();
+    
+    private long bytes;
+    
+    public long getBytes() {
+        return bytes;
+    }
+
+    public void setBytes(long bytes) {
+        this.bytes = bytes;
+    }
 
     /**
      * Parses a string in MongoDB Extended JSON format to a {@code BsonDocument}

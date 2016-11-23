@@ -22,17 +22,22 @@ import com.mongodb.ServerCursor;
 
 import java.util.List;
 
+import org.bson.CountedBytes;
+
 /**
  * A batch of query results.
  *
  * @param <T> the type of document to decode query results to
  * @since 3.0
  */
-public class QueryResult<T> {
+public class QueryResult<T> implements CountedBytes{
+
     private final MongoNamespace namespace;
     private final List<T> results;
     private final long cursorId;
     private final ServerAddress serverAddress;
+    
+    private long bytes; //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
 
     /**
      * Construct an instance.
@@ -59,6 +64,16 @@ public class QueryResult<T> {
     QueryResult(final MongoNamespace namespace, final ReplyMessage<T> replyMessage, final ServerAddress address) {
         this(namespace, replyMessage.getDocuments(), replyMessage.getReplyHeader().getCursorId(), address
             );
+    }
+    
+    //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+    public long getBytes() {
+        return bytes;
+    }
+
+    //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+    public void setBytes(long bytes) {
+        this.bytes = bytes;
     }
 
     /**

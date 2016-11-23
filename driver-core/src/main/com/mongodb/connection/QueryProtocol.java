@@ -287,6 +287,7 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
             }
 
             ResponseBuffers responseBuffers = connection.receiveMessage(message.getId());
+            long bytes = responseBuffers.getBodyByteBuffer().remaining();
             try {
                 if (responseBuffers.getReplyHeader().isQueryFailure()) {
                     BsonDocument errorDocument = new ReplyMessage<BsonDocument>(responseBuffers,
@@ -297,6 +298,8 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
                 ReplyMessage<T> replyMessage = new ReplyMessage<T>(responseBuffers, resultDecoder, message.getId());
 
                 QueryResult<T> queryResult = new QueryResult<T>(namespace, replyMessage, connection.getDescription().getServerAddress());
+                //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+                queryResult.setBytes(bytes);
 
                 sendQuerySucceededEvent(connection.getDescription(), startTimeNanos, message, isExplain, responseBuffers, queryResult);
 
@@ -497,6 +500,8 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
                                                            ? new BsonInt64(0) : new BsonInt64(queryResult.getCursor().getId()))
                                           .append("ns", new BsonString(namespace.getFullName()))
                                           .append("firstBatch", new BsonArray(rawResultDocuments));
+            //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+            cursorDocument.setBytes(responseBuffers.getBodyByteBuffer().remaining());
 
             return new BsonDocument("cursor", cursorDocument)
                    .append("ok", new BsonDouble(1));
@@ -531,8 +536,11 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
                                                                                 getRequestId()).getDocuments().get(0);
                     throw getQueryFailureException(errorDocument, getServerAddress());
                 } else {
+                    long bytes = responseBuffers.getBodyByteBuffer().remaining();
                     QueryResult<T> result = new QueryResult<T>(namespace, new ReplyMessage<T>(responseBuffers, resultDecoder,
                                                                getRequestId()), getServerAddress());
+                  //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+                    result.setBytes(bytes);
 
                     sendQuerySucceededEvent(connectionDescription, startTimeNanos, message, isExplainEvent, responseBuffers, result);
 

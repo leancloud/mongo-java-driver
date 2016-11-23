@@ -862,6 +862,7 @@ public class FindOperation<T> implements AsyncReadOperation<AsyncBatchCursor<T>>
         } else {
             queryResult = cursorDocumentToQueryResult(result.getDocument("cursor"), serverAddress);
         }
+        queryResult.setBytes(result.getBytes()); //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
         return queryResult;
     }
 

@@ -34,6 +34,7 @@ codereview.rc
 
 # local settings
 **/gradle.properties
+**/build.gradle
 
 # doc settings
 docs/reference/public

@@ -85,6 +85,8 @@ class GetMoreProtocol<T> implements Protocol<QueryResult<T>> {
         try {
             sendMessage(message, connection);
             ResponseBuffers responseBuffers = connection.receiveMessage(message.getId());
+          //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+            long bytes = responseBuffers.getBodyByteBuffer().remaining();
             try {
                 if (responseBuffers.getReplyHeader().isCursorNotFound()) {
                     throw new MongoCursorNotFoundException(message.getCursorId(), connection.getDescription().getServerAddress());
@@ -99,6 +101,9 @@ class GetMoreProtocol<T> implements Protocol<QueryResult<T>> {
 
                 queryResult = new QueryResult<T>(namespace, new ReplyMessage<T>(responseBuffers, resultDecoder, message.getId()),
                                                  connection.getDescription().getServerAddress());
+                
+                //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+                queryResult.setBytes(bytes);
 
                 if (commandListener != null) {
                     sendCommandSucceededEvent(message, COMMAND_NAME,
@@ -231,8 +236,12 @@ class GetMoreProtocol<T> implements Protocol<QueryResult<T>> {
                             message.getId()).getDocuments().get(0);
                     throw getQueryFailureException(errorDocument, connectionDescription.getServerAddress());
                 } else {
+                     //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+                    long bytes = responseBuffers.getBodyByteBuffer().remaining();
                     QueryResult<T> result = new QueryResult<T>(namespace, new ReplyMessage<T>(responseBuffers, resultDecoder,
                                                                getRequestId()), getServerAddress());
+                    //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+                    result.setBytes(bytes);
 
                     if (commandListener != null) {
                         sendCommandSucceededEvent(message, COMMAND_NAME,
