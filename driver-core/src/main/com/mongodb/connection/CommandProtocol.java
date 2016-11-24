@@ -113,7 +113,7 @@ class CommandProtocol<T> implements Protocol<T> {
             sendMessage(commandMessage, connection);
             responseBuffers = connection.receiveMessage(commandMessage.getId());
             //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
-            long bytes = responseBuffers.getBodyByteBuffer().remaining();
+            long bytes = responseBuffers.getResponseBytes();
             if (!ProtocolHelper.isCommandOk(new BsonBinaryReader(new ByteBufferBsonInput(responseBuffers.getBodyByteBuffer())))) {
                 throw getCommandFailureException(getResponseDocument(responseBuffers, commandMessage, new BsonDocumentCodec()),
                         connection.getDescription().getServerAddress());
@@ -259,7 +259,7 @@ class CommandProtocol<T> implements Protocol<T> {
         protected void callCallback(final ResponseBuffers responseBuffers, final Throwable throwableFromCallback) {
             try {
               //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
-                long bytes = responseBuffers.getBodyByteBuffer().remaining();
+                long bytes = responseBuffers.getResponseBytes();
                 if (throwableFromCallback != null) {
                     throw throwableFromCallback;
                 }

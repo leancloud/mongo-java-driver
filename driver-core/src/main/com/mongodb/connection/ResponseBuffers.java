@@ -68,4 +68,11 @@ class ResponseBuffers implements Closeable {
             isClosed = true;
         }
     }
+
+    public long getResponseBytes() {
+        if (bodyByteBuffer == null) {
+            return 0;
+        }
+        return (long) bodyByteBuffer.remaining();
+    }
 }

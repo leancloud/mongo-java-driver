@@ -86,7 +86,7 @@ class GetMoreProtocol<T> implements Protocol<QueryResult<T>> {
             sendMessage(message, connection);
             ResponseBuffers responseBuffers = connection.receiveMessage(message.getId());
           //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
-            long bytes = responseBuffers.getBodyByteBuffer().remaining();
+            long bytes = responseBuffers.getResponseBytes();
             try {
                 if (responseBuffers.getReplyHeader().isCursorNotFound()) {
                     throw new MongoCursorNotFoundException(message.getCursorId(), connection.getDescription().getServerAddress());
@@ -237,7 +237,7 @@ class GetMoreProtocol<T> implements Protocol<QueryResult<T>> {
                     throw getQueryFailureException(errorDocument, connectionDescription.getServerAddress());
                 } else {
                      //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
-                    long bytes = responseBuffers.getBodyByteBuffer().remaining();
+                    long bytes = responseBuffers.getResponseBytes();
                     QueryResult<T> result = new QueryResult<T>(namespace, new ReplyMessage<T>(responseBuffers, resultDecoder,
                                                                getRequestId()), getServerAddress());
                     //patched by dennis, xzhuang@leancloud.cn, 2016.11.23

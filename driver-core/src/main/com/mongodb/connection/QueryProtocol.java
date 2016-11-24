@@ -287,7 +287,7 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
             }
 
             ResponseBuffers responseBuffers = connection.receiveMessage(message.getId());
-            long bytes = responseBuffers.getBodyByteBuffer().remaining();
+            long bytes = responseBuffers.getResponseBytes();
             try {
                 if (responseBuffers.getReplyHeader().isQueryFailure()) {
                     BsonDocument errorDocument = new ReplyMessage<BsonDocument>(responseBuffers,
@@ -501,7 +501,7 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
                                           .append("ns", new BsonString(namespace.getFullName()))
                                           .append("firstBatch", new BsonArray(rawResultDocuments));
             //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
-            cursorDocument.setBytes(responseBuffers.getBodyByteBuffer().remaining());
+            cursorDocument.setBytes(responseBuffers.getResponseBytes());
 
             return new BsonDocument("cursor", cursorDocument)
                    .append("ok", new BsonDouble(1));
@@ -536,7 +536,7 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
                                                                                 getRequestId()).getDocuments().get(0);
                     throw getQueryFailureException(errorDocument, getServerAddress());
                 } else {
-                    long bytes = responseBuffers.getBodyByteBuffer().remaining();
+                    long bytes = responseBuffers.getResponseBytes();
                     QueryResult<T> result = new QueryResult<T>(namespace, new ReplyMessage<T>(responseBuffers, resultDecoder,
                                                                getRequestId()), getServerAddress());
                   //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
