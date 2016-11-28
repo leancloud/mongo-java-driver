@@ -42,6 +42,9 @@ import static com.mongodb.operation.OperationHelper.serverIsAtLeastVersionThreeD
 import static com.mongodb.operation.QueryHelper.translateCommandException;
 import static java.util.Collections.singletonList;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 class QueryBatchCursor<T> implements BatchCursor<T> {
     private final MongoNamespace namespace;
     private final int limit;
@@ -55,6 +58,9 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
     private int count;
     private boolean closed;
     private long bytes; //patched by dennis, xzhuang@leancloud.cn, 2016.11.23
+    
+    private static Logger logger = LoggerFactory
+            .getLogger("com.mongodb.connection.MongoQueryAnalyzer.logger");
     
     private static final long MAX_CURSOR_QUERY_SIZE_BYTES = Long.parseLong(System
         .getenv("MONGO_MAX_CURSOR_QUERY_SIZE_BYTES") != null ? System.getenv("MONGO_MAX_CURSOR_QUERY_SIZE_BYTES") : "-1");
@@ -100,7 +106,11 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
      */
     private boolean bytesReached() {
         if (MAX_CURSOR_QUERY_SIZE_BYTES > 0) {
-            return bytes >= MAX_CURSOR_QUERY_SIZE_BYTES;
+            boolean ret = bytes >= MAX_CURSOR_QUERY_SIZE_BYTES;
+            if (ret) {
+                logger.info("LARGE_QUERY " + bytes + " bytes " + namespace + " " + this.namespace);
+            }
+            return ret;
         }
         return false;
     }
