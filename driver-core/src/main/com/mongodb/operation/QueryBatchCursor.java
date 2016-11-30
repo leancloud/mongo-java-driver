@@ -98,6 +98,15 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
     }
     
 
+    private static boolean isLesserFreeMemory() {
+        Runtime runtime = Runtime.getRuntime();
+        long maxMemory = runtime.maxMemory();
+        long allocatedMemory = runtime.totalMemory();
+        long freeMemory = runtime.freeMemory();
+        long totalFreeMemory = freeMemory + (maxMemory - allocatedMemory);
+        return (totalFreeMemory / (double) maxMemory) < 0.3;
+    }
+
     /**
      * Reached MAX_CURSOR_QUERY_SIZE_BYTES
      * 
@@ -106,7 +115,7 @@ class QueryBatchCursor<T> implements BatchCursor<T> {
      */
     private boolean bytesReached() {
         if (MAX_CURSOR_QUERY_SIZE_BYTES > 0) {
-            boolean ret = bytes >= MAX_CURSOR_QUERY_SIZE_BYTES;
+            boolean ret = (bytes >= MAX_CURSOR_QUERY_SIZE_BYTES) && isLesserFreeMemory();
             if (ret) {
                 logger.info("LARGE_QUERY " + bytes + " bytes " + namespace + " " + this.namespace);
             }
