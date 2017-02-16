@@ -21,6 +21,8 @@ import com.mongodb.async.SingleResultCallback;
 import com.mongodb.diagnostics.logging.Logger;
 import com.mongodb.diagnostics.logging.Loggers;
 import com.mongodb.event.CommandListener;
+import com.mongodb.utils.SystemTimer;
+
 import org.bson.BsonArray;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
@@ -273,8 +275,10 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
                                 connection.getDescription().getConnectionId(), connection.getDescription().getServerAddress()));
         }
         long startTimeNanos = System.nanoTime();
+        long begin = SystemTimer.currentTimeMillis();
         QueryMessage message = null;
         try {
+            MongoQueryAnalyzer.beforeGet(namespace.getDatabaseName());
             boolean isExplain = false;
             ByteBufferBsonOutput bsonOutput = new ByteBufferBsonOutput(connection);
             try {
@@ -307,6 +311,8 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
 
                 return queryResult;
             } finally {
+                MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
+                MongoQueryAnalyzer.logQuery("find", namespace.getFullName(), queryDocument, (SystemTimer.currentTimeMillis() - begin));
                 responseBuffers.close();
             }
 
