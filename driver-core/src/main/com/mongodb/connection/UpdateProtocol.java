@@ -23,6 +23,8 @@ import com.mongodb.async.SingleResultCallback;
 import com.mongodb.bulk.UpdateRequest;
 import com.mongodb.diagnostics.logging.Logger;
 import com.mongodb.diagnostics.logging.Loggers;
+import com.mongodb.utils.SystemTimer;
+
 import org.bson.BsonArray;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
@@ -60,13 +62,27 @@ class UpdateProtocol extends WriteProtocol {
 
     @Override
     public WriteConcernResult execute(final InternalConnection connection) {
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug(format("Updating documents in namespace %s on connection [%s] to server %s", getNamespace(),
-                                connection.getDescription().getConnectionId(), connection.getDescription().getServerAddress()));
+        long begin = SystemTimer.currentTimeMillis();
+        try {
+            MongoQueryAnalyzer.beforeGet(getNamespace().getDatabaseName());
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug(format("Updating documents in namespace %s on connection [%s] to server %s",
+                    getNamespace(), connection.getDescription().getConnectionId(), connection.getDescription()
+                        .getServerAddress()));
+            }
+            WriteConcernResult writeConcernResult = super.execute(connection);
+            LOGGER.debug("Update completed");
+            return writeConcernResult;
         }
-        WriteConcernResult writeConcernResult = super.execute(connection);
-        LOGGER.debug("Update completed");
-        return writeConcernResult;
+        finally {
+            MongoQueryAnalyzer.afterReturn(getNamespace().getDatabaseName());
+            if (updates != null) {
+                long avgCost = (SystemTimer.currentTimeMillis() - begin) / updates.size();
+                for (UpdateRequest r : updates) {
+                    MongoQueryAnalyzer.logQuery("update", getNamespace().getFullName(), r.getFilter(), avgCost);
+                }
+            }
+        }
     }
 
     @Override
