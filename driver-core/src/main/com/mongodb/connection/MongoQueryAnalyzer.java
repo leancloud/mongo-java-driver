@@ -375,7 +375,9 @@ public class MongoQueryAnalyzer {
 				queryLogger.info(msg);
 				flumeLog(msg);
 			}
-			logger.info("SLOW_QUERY " + time + " " + namespace + " " + query);
+			if (q != null && !q.containsKey("_id") && !namespace.endsWith("_Installation")) {
+			    logger.info("SLOW_QUERY " + time + " " + namespace + " " + query);
+	        }			
 		}
 	}
 
