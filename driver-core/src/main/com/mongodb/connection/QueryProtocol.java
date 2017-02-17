@@ -311,8 +311,6 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
 
                 return queryResult;
             } finally {
-                MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
-                MongoQueryAnalyzer.logQuery("find", namespace.getFullName(), queryDocument, (SystemTimer.currentTimeMillis() - begin));
                 responseBuffers.close();
             }
 
@@ -321,6 +319,10 @@ class QueryProtocol<T> implements Protocol<QueryResult<T>> {
                 sendCommandFailedEvent(message, FIND_COMMAND_NAME, connection.getDescription(), startTimeNanos, e, commandListener);
             }
             throw e;
+        } finally {
+            MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
+            MongoQueryAnalyzer.logQuery("find", namespace.getFullName(), queryDocument,
+                (SystemTimer.currentTimeMillis() - begin));
         }
     }
 

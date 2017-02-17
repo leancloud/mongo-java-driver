@@ -246,20 +246,13 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
                                     final boolean awaitData, final boolean noCursorTimeout,
                                     final boolean partial, final boolean oplogReplay,
                                     final Decoder<T> resultDecoder) {
-        long begin = SystemTimer.currentTimeMillis();
-    	try {
-    		MongoQueryAnalyzer.beforeGet(namespace.getDatabaseName());
-	        return executeProtocol(new QueryProtocol<T>(namespace, skip, numberToReturn, queryDocument, fields, resultDecoder)
+	    return executeProtocol(new QueryProtocol<T>(namespace, skip, numberToReturn, queryDocument, fields, resultDecoder)
 	                               .tailableCursor(tailableCursor)
 	                               .slaveOk(getSlaveOk(slaveOk))
 	                               .oplogReplay(oplogReplay)
 	                               .noCursorTimeout(noCursorTimeout)
 	                               .awaitData(awaitData)
 	                               .partial(partial));
-    	} finally {
-    		MongoQueryAnalyzer.afterReturn(namespace.getDatabaseName());
-    		MongoQueryAnalyzer.logQuery("find", namespace.getFullName(), queryDocument, (SystemTimer.currentTimeMillis() - begin));
-    	}
     }
 
     @Override
