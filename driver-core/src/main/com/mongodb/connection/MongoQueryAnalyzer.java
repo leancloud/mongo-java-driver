@@ -298,25 +298,40 @@ public class MongoQueryAnalyzer {
 
 		BsonDocument q = query;
 
-		if (query.containsKey("$query")) {
-			q = (BsonDocument) query.get("$query");
-		} else if (query.containsKey("query")) {
-			q = (BsonDocument) query.get("query");
-		}
+        if (query.containsKey("$query")) {
+            q = (BsonDocument) query.get("$query");
+        }
+        else if (query.containsKey("query")) {
+            q = (BsonDocument) query.get("query");
+        }
+        else if (query.containsKey("filter")) {
+            q = (BsonDocument) query.get("filter");
+        }
 
 		String orderby = null;
 
-		if (query.containsKey("$orderby")) {
-			BsonDocument o = (BsonDocument) query.get("$orderby");
-			ArrayList<String> orders = new ArrayList<String>();
-			for (String k : o.keySet()) {
-				BsonValue v = o.get(k);
-				if (v.isNumber()) {
-					orders.add(k + ":" + v.asNumber().longValue());
-				}
-			}
-			orderby = joinString(orders.toArray(new String[0]), ',');
-		}
+        if (query.containsKey("$orderby")) {
+            BsonDocument o = (BsonDocument) query.get("$orderby");
+            ArrayList<String> orders = new ArrayList<String>();
+            for (String k : o.keySet()) {
+                BsonValue v = o.get(k);
+                if (v.isNumber()) {
+                    orders.add(k + ":" + v.asNumber().longValue());
+                }
+            }
+            orderby = joinString(orders.toArray(new String[0]), ',');
+        }
+        else if (query.containsKey("sort")) {
+            BsonDocument o = (BsonDocument) query.get("sort");
+            ArrayList<String> orders = new ArrayList<String>();
+            for (String k : o.keySet()) {
+                BsonValue v = o.get(k);
+                if (v.isNumber()) {
+                    orders.add(k + ":" + v.asNumber().longValue());
+                }
+            }
+            orderby = joinString(orders.toArray(new String[0]), ',');
+        }
 
 		if (q.containsKey("_id") && time < queryThreshold) {
 			return;
