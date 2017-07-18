@@ -219,16 +219,22 @@ class DefaultServerConnection extends AbstractReferenceCounted implements Connec
     		MongoQueryAnalyzer.beforeGet(database);
     		return executeProtocol(new CommandProtocol<T>(database, command, fieldNameValidator, commandResultDecoder).slaveOk(getSlaveOk(slaveOk)));
     	} finally {
-    		MongoQueryAnalyzer.afterReturn(database);
-    		if(command.containsKey("count")) {
-    			String namespace = database + "." + command.get("count").asString().getValue();
-        		MongoQueryAnalyzer.logQuery("count", namespace, command, (SystemTimer.currentTimeMillis() - begin));
-    		} else if (command.containsKey("findandmodify")) {
-    			String namespace = database + "." + command.get("findandmodify").asString().getValue();
-        		MongoQueryAnalyzer.logQuery("find", namespace, command, (SystemTimer.currentTimeMillis() - begin));
-            } else if (command.containsKey("find")) {
-                String namespace = database + "." + command.get("find").asString().getValue();
-                MongoQueryAnalyzer.logQuery("find", namespace, command, (SystemTimer.currentTimeMillis() - begin));
+            MongoQueryAnalyzer.afterReturn(database);
+            BsonDocument q = command;
+            if (q.containsKey("$query")) {
+                q = command.getDocument("$query");
+            }
+            if (q.containsKey("count")) {
+                String namespace = database + "." + q.get("count").asString().getValue();
+                MongoQueryAnalyzer.logQuery("count", namespace, q, (SystemTimer.currentTimeMillis() - begin));
+            }
+            else if (q.containsKey("findandmodify")) {
+                String namespace = database + "." + q.get("findandmodify").asString().getValue();
+                MongoQueryAnalyzer.logQuery("find", namespace, q, (SystemTimer.currentTimeMillis() - begin));
+            }
+            else if (q.containsKey("find")) {
+                String namespace = database + "." + q.get("find").asString().getValue();
+                MongoQueryAnalyzer.logQuery("find", namespace, q, (SystemTimer.currentTimeMillis() - begin));
             }
     	}
     }
