@@ -374,9 +374,16 @@ public class MongoQueryAnalyzer {
                 namespace = dbCollection[0] + "." + query.get("count");
                 cmdType = "count";
             }
-            else {
-                return;
+            else if (query.containsKey("find")) {
+                namespace = dbCollection[0] + "." + query.get("find");
+                cmdType = "find";
             }
+            else if (query.containsKey("findandmodify")) {
+                namespace = dbCollection[0] + "." + query.get("findandmodify");
+                cmdType = "find";
+            }
+            else
+                return;
         }
 
         String queryString = "";
