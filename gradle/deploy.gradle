@@ -25,12 +25,12 @@ configure(subprojects - project(':util')) {
     modifyPom {
         project {
 
-            url 'https://github.com/mongodb/mongo-java-driver'
+            url 'https://github.com/leancloud/mongo-java-driver'
 
             scm {
-                url 'https://github.com/mongodb/mongo-java-driver'
-                connection 'scm:https://github.com/mongodb/mongo-java-driver.git'
-                developerConnection 'scm:git@github.com:mongodb/mongo-java-driver.git'
+                url 'https://github.com/leancloud/mongo-java-driver'
+                connection 'scm:https://github.com/leancloud/mongo-java-driver.git'
+                developerConnection 'scm:git@github.com:leancloud/mongo-java-driver.git'
             }
 
             licenses {
@@ -43,11 +43,17 @@ configure(subprojects - project(':util')) {
 
             developers {
                 developer {
-                    name 'Various'
-                    organization = 'MongoDB'
+                    name 'eng@leancloud.rocks'
+                    organization = 'LeanCloud'
                 }
             }
         }
+    }
+
+    extraArchive {
+        sources = true
+        tests = false
+        javadoc = true
     }
 
     modifyPom { pom ->
@@ -63,4 +69,9 @@ configure(subprojects - project(':util')) {
         }
     }
 
+    nexus {
+        sign = true
+        repositoryUrl = 'https://oss.sonatype.org/service/local/staging/deploy/maven2/'
+        snapshotRepositoryUrl = 'https://oss.sonatype.org/content/repositories/snapshots'
+    }
 }
