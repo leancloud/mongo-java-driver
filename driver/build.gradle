@@ -62,11 +62,3 @@ publishing {
     }
 }
 
-publishing {
-    repositories {
-        maven {
-            // change to point to your repo, e.g. http://my.org/repo
-            url "http://maven.mei.fm/nexus/content/repositories/snapshots"
-        }
-    }
-}

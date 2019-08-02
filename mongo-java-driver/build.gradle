@@ -68,3 +68,5 @@ modifyPom {
         url 'http://www.mongodb.org'
     }
 }
+
+apply from: '../gradle/deploy.gradle'

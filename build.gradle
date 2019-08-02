@@ -45,7 +45,7 @@ configure(subprojects.findAll { it.name != 'util' }) {
     evaluationDependsOn(':util')
 
     group = 'cn.leancloud'
-    version = '3.3.0-query-log-max-size-SNAPSHOT'
+    version = '3.3.0-query-log-max-size'
     sourceCompatibility = JavaVersion.VERSION_1_6
     targetCompatibility = JavaVersion.VERSION_1_6
 
